@@ -1,16 +1,23 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/notify"
+	"github.com/mgreau/zen/internal/tmux"
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,18 +30,158 @@ type Config struct {
 	Agent        string                `yaml:"agent"` // "claude" (default) or "codex"
 	ClaudeBin    string                `yaml:"claude_bin"`
 	CodexBin     string                `yaml:"codex_bin"`
-	Terminal     string                `yaml:"terminal"` // "iterm", "ghostty", "kitty", or "macos"
-	BranchPrefix string                `yaml:"branch_prefix"`
-	IgnoreDrafts bool                  `yaml:"ignore_drafts"`
-	Watch        WatchConfig           `yaml:"watch"`
-	Slack        SlackConfig           `yaml:"slack"`
+	// RemoteControl launches every agent session with remote control enabled
+	// (Claude Code's --remote-control; Codex's remote-control app-server
+	// daemon). Off by default.
+	RemoteControl bool         `yaml:"remote_control"`
+	Terminal      string       `yaml:"terminal"` // "iterm", "ghostty", "kitty", "macos", or "tmux"
+	BranchPrefix  string       `yaml:"branch_prefix"`
+	IgnoreDrafts  bool         `yaml:"ignore_drafts"`
+	Watch         WatchConfig  `yaml:"watch"`
+	Slack         SlackConfig  `yaml:"slack"`
+	Notify        NotifyConfig `yaml:"notify,omitempty"`
+	Tmux          TmuxConfig   `yaml:"tmux,omitempty"`
+}
+
+// TmuxConfig sets up each new tmux session, through the hook `zen setup
+// tmux` installs. It takes effect for sessions created after a change, with
+// no need to run setup again.
+type TmuxConfig struct {
+	// FirstWindowCommand is typed into the first window of each new
+	// session, such as "zen dashboard". Unset means "zen inbox"; empty
+	// means nothing. See FirstWindow.
+	FirstWindowCommand *string `yaml:"first_window_command,omitempty"`
+	// AgentsWindow also opens an "Agents" window in the background.
+	AgentsWindow bool `yaml:"agents_window,omitempty"`
+	// AgentsWindowCommand runs in the Agents window, such as "claude".
+	// Empty means the agent's view of its sessions: "claude agents", or
+	// "codex agents".
+	AgentsWindowCommand string `yaml:"agents_window_command,omitempty"`
+	// AgentsWindowDir is the Agents window's working directory. Empty means
+	// ~/git, so the agent doesn't ask to trust your home directory each time.
+	AgentsWindowDir string `yaml:"agents_window_dir,omitempty"`
+}
+
+// DefaultAgentsWindowDir is the Agents window's directory unless
+// tmux.agents_window_dir says otherwise.
+const DefaultAgentsWindowDir = "~/git"
+
+// FirstWindow returns the command typed into each new session's first
+// window, or "" for none. zen is how to run zen, for the default.
+func (t TmuxConfig) FirstWindow(zen string) string {
+	if t.FirstWindowCommand == nil {
+		return zen + " inbox"
+	}
+	return strings.TrimSpace(*t.FirstWindowCommand)
+}
+
+// AgentsWindowCmd returns the command for the Agents window, or "" when it
+// is off. ag is the configured agent, for the default.
+func (t TmuxConfig) AgentsWindowCmd(ag agent.Agent) string {
+	if !t.AgentsWindow {
+		return ""
+	}
+	if cmd := strings.TrimSpace(t.AgentsWindowCommand); cmd != "" {
+		return cmd
+	}
+	return ag.AgentsCommand()
+}
+
+// GetAgentsWindowDir returns the Agents window's directory, with a leading
+// "~/" expanded.
+func (t TmuxConfig) GetAgentsWindowDir() string {
+	dir := t.AgentsWindowDir
+	if dir == "" {
+		dir = DefaultAgentsWindowDir
+	}
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		dir = filepath.Join(os.Getenv("HOME"), dir[1:])
+	}
+	return dir
+}
+
+// NotifyConfig holds what the daemon does for a notification besides showing
+// it on the desktop (see notify.Configure).
+type NotifyConfig struct {
+	// Command is a shell command run for each notification, such as a curl
+	// to a push service. Empty means none.
+	Command string `yaml:"command,omitempty"`
+	// Events limits Command to these events (see notify.Events). Empty
+	// means all of them.
+	Events []string `yaml:"events,omitempty"`
+
+	// Terminal turns zen's own notifications for Claude in tmux windows on
+	// or off; unset means on. They replace Claude's built-in ones there,
+	// naming the worktree or PR and quoting Claude, and reach the computer
+	// you ssh from through tmux. See TerminalEnabled.
+	Terminal *bool `yaml:"terminal,omitempty"`
+	// TerminalEvents are the Claude events zen notifies about: "stop" (a
+	// turn ended) and Claude's notification types, such as
+	// "permission_prompt". Unset means DefaultTerminalEvents; an empty list
+	// means none.
+	TerminalEvents []string `yaml:"terminal_events,omitempty"`
+	// TerminalSequence is the escape sequence for the notification: "auto"
+	// (the default), "osc777" (Ghostty) or "osc9" (iTerm2 and others).
+	TerminalSequence string `yaml:"terminal_sequence,omitempty"`
+}
+
+// DefaultTerminalEvents are the Claude events zen notifies about unless
+// notify.terminal_events says otherwise. Claude's "idle_prompt" is left out:
+// it repeats "stop", a minute later.
+var DefaultTerminalEvents = []string{"stop", "stop_failure", "permission_prompt", "elicitation_dialog"}
+
+// TerminalEvents lists the values notify.terminal_events takes: zen's
+// names for the end of a turn, and Claude Code's notification types.
+var TerminalEvents = []string{
+	"stop", "stop_failure",
+	"permission_prompt", "idle_prompt", "elicitation_dialog", "elicitation_url_dialog",
+	"elicitation_complete", "elicitation_response", "auth_success", "auth_storage_failure",
+	"agent_needs_input", "agent_completed", "plugin_notification",
+	"quota_auto_resume_fired", "quota_auto_resume_stale", "quota_auto_resume_disabled",
+}
+
+// TerminalEnabled reports whether zen sends its own notifications for
+// Claude in tmux windows.
+func (n NotifyConfig) TerminalEnabled() bool {
+	return n.Terminal == nil || *n.Terminal
+}
+
+// UnknownTerminalEvents returns the notify.terminal_events values zen doesn't
+// know. They are kept, since Claude may have added a notification type since
+// this list was written, but a misspelt one quietly drops its notifications
+// (with Claude's own turned off in zen's windows), so zen warns about them.
+func (n NotifyConfig) UnknownTerminalEvents() []string {
+	var unknown []string
+	for _, e := range n.TerminalEvents {
+		if !slices.Contains(TerminalEvents, e) {
+			unknown = append(unknown, e)
+		}
+	}
+	return unknown
+}
+
+// GetTerminalEvents returns the Claude events zen notifies about.
+func (n NotifyConfig) GetTerminalEvents() []string {
+	if n.TerminalEvents == nil {
+		return DefaultTerminalEvents
+	}
+	return n.TerminalEvents
+}
+
+// GetTerminalSequence returns the notification escape sequence.
+func (n NotifyConfig) GetTerminalSequence() tmux.Sequence {
+	if n.TerminalSequence == "" {
+		return tmux.SequenceAuto
+	}
+	return tmux.Sequence(n.TerminalSequence)
 }
 
 // SlackConfig holds configuration for the Slack task watcher: polling for the
 // user's own emoji reaction on a message, then spinning up a feature worktree
 // seeded with the thread as context. Disabled unless Enabled is explicitly
-// set to true. The Slack token itself is never stored here — it's read from
-// the ZEN_SLACK_TOKEN environment variable at daemon startup.
+// set to true. The Slack token itself is never stored here: it comes from
+// ZEN_SLACK_TOKEN, or from the rotating token zen slack login keeps in the
+// state directory.
 type SlackConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	Emoji        string `yaml:"emoji"`         // reaction name (no colons) that flags a task, default "claudecode"
@@ -42,6 +189,17 @@ type SlackConfig struct {
 	PollInterval string `yaml:"poll_interval"` // default "5m"
 	AckReaction  string `yaml:"ack_reaction"`  // reaction added on pickup, default "eyes"
 	DoneEmoji    string `yaml:"done_emoji"`    // reaction (on the original message) or a merged PR from the worktree's branch stops further completion DMs, default "done_check"
+	ClientID     string `yaml:"client_id"`     // Slack app client ID for zen slack login (PKCE; no secret needed)
+	RedirectPort int    `yaml:"redirect_port"` // localhost port for the OAuth redirect, default 8765
+}
+
+// GetRedirectPort returns the localhost port zen slack login listens on,
+// defaulting to 8765.
+func (s SlackConfig) GetRedirectPort() int {
+	if s.RedirectPort > 0 {
+		return s.RedirectPort
+	}
+	return 8765
 }
 
 // GetEmoji returns the configured reaction name, defaulting to "claudecode".
@@ -202,17 +360,64 @@ func zenHome() string {
 // Load reads the YAML config from ~/.zen/config.yaml.
 // Returns an error if the config file does not exist or is invalid.
 func Load() (*Config, error) {
-	yamlPath := filepath.Join(zenHome(), "config.yaml")
+	yamlPath := Path()
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
 		return nil, fmt.Errorf("config file not found: %s\nRun 'zen setup' to create it", yamlPath)
 	}
 
-	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	cfg, err := Parse(data)
+	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", yamlPath, err)
 	}
+	return cfg, nil
+}
 
+// Path is the config file zen reads: config.yaml under Dir.
+func Path() string {
+	return filepath.Join(zenHome(), "config.yaml")
+}
+
+// Parse decodes config YAML, applies defaults for optional fields, validates
+// the agent and terminal, and expands ~ in base paths. Load uses it for the
+// config file; zen setup uses it to check a config before writing one.
+func Parse(data []byte) (*Config, error) {
+	cfg := &Config{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	return finish(cfg)
+}
+
+// ParseStrict is Parse, except that a key zen does not know (a typo such as
+// "authers") is an error instead of being ignored. zen setup uses it for a
+// config it installs; Load stays lenient so the daemon's live reload keeps
+// working while a config is being edited.
+func ParseStrict(data []byte) (*Config, error) {
+	cfg := &Config{}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	err := dec.Decode(cfg)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if err == nil {
+		// Load reads only the first document, so a second one would be
+		// installed without ever being checked or used.
+		var extra yaml.Node
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("config holds more than one YAML document (---); zen reads only the first")
+		}
+	}
+	return finish(cfg)
+}
+
+// finish applies defaults, validates the agent and terminal, and expands
+// paths on a decoded config.
+func finish(cfg *Config) (*Config, error) {
 	// Apply defaults for optional fields
 	if cfg.PollInterval == "" {
 		cfg.PollInterval = "5m"
@@ -237,12 +442,73 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf("invalid terminal type %q: must be \"iterm\", \"ghostty\", \"kitty\", \"macos\", or \"tmux\"", cfg.Terminal)
 	}
+	for _, e := range cfg.Notify.Events {
+		if !slices.Contains(notify.Events(), e) {
+			return nil, fmt.Errorf("invalid notify event %q: must be one of %s", e, strings.Join(notify.Events(), ", "))
+		}
+	}
+	if seq := cfg.Notify.GetTerminalSequence(); !slices.Contains(tmux.Sequences(), seq) {
+		return nil, fmt.Errorf("invalid notify.terminal_sequence %q: must be auto, osc777, or osc9", seq)
+	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
 	}
 
 	cfg.expandPaths()
 	return cfg, nil
+}
+
+// repoShortName is what a repo's short name may look like. It names worktree
+// directories (<short>-pr-N), so it cannot hold a path separator or space or
+// start like a flag.
+var repoShortName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ValidateRepos reports a config zen cannot work with: no repos, a short name
+// that cannot name a worktree directory, or a repo without an owner/name
+// full_name or a base_path. Load does not enforce this
+// (a hand-edited config may be mid-change and the daemon reloads it live);
+// zen setup does, so a provisioned machine starts with a usable config.
+func (c *Config) ValidateRepos() error {
+	if len(c.Repos) == 0 {
+		return fmt.Errorf("no repos configured")
+	}
+	for _, name := range c.sortedRepoNames() {
+		if err := ValidateRepoShortName(name); err != nil {
+			return err
+		}
+		repo := c.Repos[name]
+		if err := ValidateRepoFullName(repo.FullName); err != nil {
+			return fmt.Errorf("repo %q: %w", name, err)
+		}
+		if strings.TrimSpace(repo.BasePath) == "" {
+			return fmt.Errorf("repo %q: base_path is required", name)
+		}
+	}
+	return nil
+}
+
+// ValidateRepoShortName reports a repo short name that cannot name a worktree
+// directory.
+func ValidateRepoShortName(name string) error {
+	if !repoShortName.MatchString(name) {
+		return fmt.Errorf("repo short name %q must be letters, digits, '.', '_' or '-', starting with a letter or digit", name)
+	}
+	return nil
+}
+
+// ValidateRepoFullName reports a full_name that is not owner/name.
+func ValidateRepoFullName(full string) error {
+	owner, rest, ok := strings.Cut(full, "/")
+	if !ok || owner == "" || rest == "" || strings.Contains(rest, "/") {
+		return fmt.Errorf("full_name %q must be owner/name", full)
+	}
+	return nil
+}
+
+func (c *Config) sortedRepoNames() []string {
+	names := c.RepoNames()
+	sort.Strings(names)
+	return names
 }
 
 // GetTerminal returns the configured terminal type.
@@ -279,7 +545,10 @@ func (c *Config) NewAgent(override string) agent.Agent {
 	if kind == "codex" {
 		bin = c.CodexBin
 	}
-	return agent.New(agent.Kind(kind), bin)
+	return agent.NewWithOptions(agent.Kind(kind), bin, agent.Options{
+		RemoteControl: c.RemoteControl,
+		DaemonLog:     filepath.Join(StateDir(), "codex-daemon.log"),
+	})
 }
 
 // GetBranchPrefix returns the prefix for feature branch names.

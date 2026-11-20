@@ -36,6 +36,8 @@ zen inbox                          # see what needs your attention
 ```
 
 - Alternatively, skip `mv zen ~/bin` and [install with Nix](#install-with-nix).
+- Provisioning a machine? `zen setup --repo owner/name:~/git/path --author you` runs unattended. See [docs/configuration.md](docs/configuration.md#unattended-install).
+- On a host you ssh into, pick `tmux` as the terminal in `zen setup`. It sets tmux up to mark the windows waiting on you, pass zen's notifications to your Mac, and start each new session with `zen inbox` or a command of your choice (and, if you like, an Agents window); `zen setup tmux` does just the tmux part. See [Terminal](docs/configuration.md#terminal).
 
 When a PR shows up in your inbox, `zen review <number>` opens that PR in a new terminal tab with Claude pre-armed and the PR context loaded. See [Prerequisites](#prerequisites) for what to install first.
 
@@ -108,6 +110,23 @@ zen work delete <name>                         # delete worktree (cleans Claude 
 ```
 
 Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
+
+### Promote an exploratory session
+
+Started digging in a regular Claude session and it turned into real work? Move the conversation into its own feature worktree instead of starting over:
+
+```bash
+/zen-import                                    # inside the Claude session: Claude picks the branch name
+/zen-import fix-token-refresh --carry-changes  # name it, and bring uncommitted edits along
+
+zen work import fix-token-refresh              # from a shell: newest session in this directory
+zen work import app fix-token-refresh          # name the repo when it can't be inferred
+zen work import --session <id> fix-token-refresh   # a specific session, from anywhere
+```
+
+zen creates the worktree (as `zen work new` does), copies the conversation into it under a new session id, and resumes it in a new terminal tab with a short hand-off message telling Claude where it now lives. After that it is an ordinary work stream: `zen work resume`, `zen work delete` and `zen status` all see it (with Codex as the configured agent, `resume` and `status` look for Codex sessions; see below). The original session and its checkout are never modified, so you can close the old session once the new tab is up.
+
+The repo is inferred when the session ran in any checkout of a configured repo. Uncommitted changes stay behind unless you pass `--carry-changes`, which applies tracked edits as a patch (3-way, so conflicts are left marked for you) and copies untracked files. `zen setup` installs `/zen-import` when you set it up for Claude; it is Claude-only, because it relies on Claude Code's `${CLAUDE_SESSION_ID}`. The imported conversation is a Claude session, so if your configured agent is Codex, resume it with `zen work resume <name> --agent claude` (or let `zen work resume` migrate it to Codex); `zen work delete` cleans up both agents' sessions either way.
 
 Every delete and cleanup path retains worktrees with local changes or a running
 agent. The delete commands' `--force` flag skips confirmation; it does not
@@ -198,7 +217,7 @@ zen watch logs search 42         # search logs for a PR, worktree, or keyword
 
 ### Slack task watcher (opt-in)
 
-React to a Slack message with `:claudecode:` (or whatever emoji you configure) and the daemon picks it up: acks in-thread, creates a feature worktree seeded with the discussion as the initial prompt, and opens it in a terminal tab right away — unlike the PR-review flow, which only prepares worktrees silently. When that session goes idle, you get a Slack DM back with a resume command and a link to the thread. Off by default; see [docs/configuration.md](docs/configuration.md#slack-task-watcher) for setup (a Slack token with a handful of scopes, via `ZEN_SLACK_TOKEN`).
+React to a Slack message with `:claudecode:` (or whatever emoji you configure) and the daemon picks it up: acks in-thread, creates a feature worktree seeded with the discussion as the initial prompt, and opens it in a terminal tab right away — unlike the PR-review flow, which only prepares worktrees silently. When that session goes idle, you get a Slack DM back with a resume command and a link to the thread. Off by default; see [docs/configuration.md](docs/configuration.md#slack-task-watcher) for setup (sign in with `zen slack login`, or set `ZEN_SLACK_TOKEN`).
 
 Manual cleanup, in case you want it. The daemon removes merged PR reviews on its own, an hour or so after merge by default. `zen cleanup` also covers work streams, and the daemon never runs it:
 
@@ -225,7 +244,7 @@ authors:
   - wlynch
 ```
 
-`zen setup` walks you through this interactively. The daemon hot-reloads config on every poll tick — no restart needed.
+`zen setup` walks you through this interactively, or writes it [unattended](docs/configuration.md#unattended-install) from flags or a file. The daemon hot-reloads config on every poll tick — no restart needed.
 
 ### Claude or Codex
 
@@ -309,6 +328,8 @@ environment.systemPackages = [
 ```
 
 **home-manager:** `home.packages = [ inputs.zen.packages.${pkgs.system}.default ];`
+
+To provision the config as well, have your activation run `zen setup --config-file <file>` (or link the file in with `home.file`). See [unattended install](docs/configuration.md#unattended-install).
 
 **Any Nix install:**
 
