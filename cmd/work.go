@@ -246,12 +246,9 @@ func launchInWorktree(ag agent.Agent, worktreePath string, command func(agent.Ag
 		return err
 	}
 
-	launchCmd := command(prepareLaunch(ag, worktreePath))
-	if err := term.OpenTab(worktreePath, launchCmd); err != nil {
-		return fmt.Errorf("opening %s tab: %w", term.Name(), err)
+	if err := openTab(term, worktreePath, ag, command); err != nil {
+		return err
 	}
-
-	ui.LogSuccess(fmt.Sprintf("%s tab opened", term.Name()))
 	fmt.Println()
 	return nil
 }

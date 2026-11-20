@@ -136,6 +136,15 @@ func TestRemoteControlCommands(t *testing.T) {
 	if got := pr.ResumeWithPrompt("abc-123", "", "moved here"); got != "claude --resume 'abc-123' 'moved here' --remote-control" {
 		t.Errorf("Claude ResumeWithPrompt = %q", got)
 	}
+	// In a tmux window the hooks' --settings come first and remote control
+	// stays last, after the prompt.
+	hooked := WithTmuxStatus(claude, "")
+	if got := hooked.StartCommand("/review-pr", ""); !strings.HasPrefix(got, "claude --settings ") || !strings.HasSuffix(got, " '/review-pr' --remote-control") {
+		t.Errorf("tmux Claude StartCommand = %q", got)
+	}
+	if got := hooked.(PromptResumer).ResumeWithPrompt("abc-123", "", "moved here"); !strings.HasPrefix(got, "claude --settings ") || !strings.HasSuffix(got, " --resume 'abc-123' 'moved here' --remote-control") {
+		t.Errorf("tmux Claude ResumeWithPrompt = %q", got)
+	}
 
 	bin := fakeCodexOnPath(t)
 	var started string

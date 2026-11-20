@@ -14,6 +14,7 @@ import (
 type claudeAgent struct {
 	bin           string
 	remoteControl bool
+	settings      string // extra settings JSON for --settings; empty for none
 }
 
 func (a *claudeAgent) Kind() Kind  { return Claude }
@@ -24,8 +25,16 @@ func (a *claudeAgent) PrepareLaunch(string) (Agent, error) { return a, nil }
 
 func (a *claudeAgent) NeedsLaunchPrep() bool { return false }
 
+// command returns the claude invocation every command starts with.
+func (a *claudeAgent) command() string {
+	if a.settings == "" {
+		return a.bin
+	}
+	return a.bin + " --settings " + shellQuote(a.settings)
+}
+
 func (a *claudeAgent) StartCommand(prompt, model string) string {
-	cmd := a.bin
+	cmd := a.command()
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
@@ -36,7 +45,7 @@ func (a *claudeAgent) StartCommand(prompt, model string) string {
 }
 
 func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
-	cmd := a.bin
+	cmd := a.command()
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
@@ -47,7 +56,7 @@ func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
 // session. The prompt goes before --remote-control, which would otherwise
 // take it as the session name.
 func (a *claudeAgent) ResumeWithPrompt(sessionID, model, prompt string) string {
-	cmd := a.bin
+	cmd := a.command()
 	if model != "" {
 		cmd += " --model " + shellQuote(model)
 	}
@@ -69,6 +78,10 @@ func (a *claudeAgent) remoteControlFlag() string {
 	}
 	return ""
 }
+
+// AgentsCommand opens Claude Code's agent view: its interactive and
+// background sessions.
+func (a *claudeAgent) AgentsCommand() string { return a.bin + " agents" }
 
 // ContextFile is CLAUDE.local.md so the repo's own CLAUDE.md is never touched.
 func (a *claudeAgent) ContextFile() string { return claudeContextFile }
