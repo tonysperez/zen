@@ -43,6 +43,23 @@ func (a *claudeAgent) ResumeCommand(sessionID, model string) string {
 	return cmd + " --resume " + shellQuote(sessionID) + a.remoteControlFlag()
 }
 
+// ResumeWithPrompt is ResumeCommand plus a first message for the resumed
+// session. The prompt goes before --remote-control, which would otherwise
+// take it as the session name.
+func (a *claudeAgent) ResumeWithPrompt(sessionID, model, prompt string) string {
+	cmd := a.bin
+	if model != "" {
+		cmd += " --model " + shellQuote(model)
+	}
+	return cmd + " --resume " + shellQuote(sessionID) + " " + shellQuote(prompt) + a.remoteControlFlag()
+}
+
+// PromptResumer is implemented by agents that can resume a session with a
+// first message.
+type PromptResumer interface {
+	ResumeWithPrompt(sessionID, model, prompt string) string
+}
+
 // remoteControlFlag is appended last: --remote-control takes an optional
 // session name, so placed before the prompt it would swallow the prompt as
 // that name and start an empty session.
@@ -107,19 +124,30 @@ func (a *claudeAgent) ParseTokensFull(path string) (string, session.TokenUsage, 
 	return session.ParseSessionDetailFull(path)
 }
 
+// CleanSessions removes the worktree's sessions file by file, with their
+// sidecar directories. The project directory can be shared with another
+// path (the name is lossy) and holds other state such as memory, so it is
+// removed only once nothing is left in it. A session with no recorded cwd
+// yet could belong to the other path, so it is left alone.
 func (a *claudeAgent) CleanSessions(worktreePath string) (int, error) {
 	sessions, _ := session.FindSessions(worktreePath)
-	if len(sessions) == 0 {
-		return 0, nil
+	removed := 0
+	for _, s := range sessions {
+		if cwd, err := session.SessionCwd(s.Path); err != nil || cwd == "" {
+			continue
+		}
+		if err := os.Remove(s.Path); err != nil && !os.IsNotExist(err) {
+			return removed, err
+		}
+		if err := os.RemoveAll(filepath.Join(filepath.Dir(s.Path), s.ID)); err != nil {
+			return removed, err
+		}
+		removed++
 	}
-	dir := session.ProjectDir(worktreePath)
-	if dir == "" {
-		return 0, nil
+	if dir := session.ProjectDir(worktreePath); dir != "" {
+		_ = os.Remove(dir) // fails, harmlessly, unless empty
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		return 0, err
-	}
-	return len(sessions), nil
+	return removed, nil
 }
 
 func (a *claudeAgent) IsProcessRunning(sessionID, worktreePath string) bool {

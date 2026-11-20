@@ -583,9 +583,19 @@ func promptValid(scanner *bufio.Scanner, label, defaultVal string, validate func
 	}
 }
 
-// embeddedPromptNames lists the slash-command prompts built into zen, named
-// without extension.
-func embeddedPromptNames() []string {
+// claudeOnlyPrompts are embedded prompts that rely on Claude Code features
+// (such as ${CLAUDE_SESSION_ID} substitution) and are not installed for
+// other agents.
+var claudeOnlyPrompts = map[string]bool{"zen-import.md": true}
+
+// promptSupported reports whether the embedded prompt file works with ag.
+func promptSupported(file string, ag agent.Agent) bool {
+	return ag.Kind() == agent.Claude || !claudeOnlyPrompts[file]
+}
+
+// embeddedPromptNames lists the slash-command prompts built into zen that
+// work with ag, named without extension.
+func embeddedPromptNames(ag agent.Agent) []string {
 	entries, err := fs.ReadDir(EmbeddedCommands, "commands")
 	if err != nil {
 		// No embedded prompts (shouldn't happen with a proper build)
@@ -593,7 +603,7 @@ func embeddedPromptNames() []string {
 	}
 	var names []string
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() && promptSupported(e.Name(), ag) {
 			names = append(names, strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 		}
 	}
@@ -609,7 +619,7 @@ func installPrompts(ag agent.Agent) (int, error) {
 	}
 	installed := 0
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !promptSupported(e.Name(), ag) {
 			continue
 		}
 		srcData, err := fs.ReadFile(EmbeddedCommands, "commands/"+e.Name())
@@ -631,7 +641,7 @@ func installPrompts(ag agent.Agent) (int, error) {
 // installAgentPrompts asks the user, then installs the embedded slash-command
 // prompts into the chosen agent's prompts directory.
 func installAgentPrompts(scanner *bufio.Scanner, ag agent.Agent) (int, error) {
-	names := embeddedPromptNames()
+	names := embeddedPromptNames(ag)
 	if len(names) == 0 {
 		return 0, nil
 	}
