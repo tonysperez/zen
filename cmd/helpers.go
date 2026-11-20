@@ -92,3 +92,15 @@ func openTab(t terminal.Terminal, workDir string, ag agent.Agent, build func(age
 	}
 	return nil
 }
+
+// humanSize formats a byte count for display.
+func humanSize(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", n>>10)
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
