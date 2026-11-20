@@ -141,7 +141,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	}
 
 	// Ensure the /review-pr prompt is installed for the chosen agent
-	ensureReviewPrompt(ag)
+	ensurePrompts(ag)
 
 	launchCmd := func(a agent.Agent) string {
 		return a.StartCommand(a.ReviewPrompt(result.WorktreePath), reviewModel)
