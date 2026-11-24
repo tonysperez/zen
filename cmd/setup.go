@@ -659,9 +659,9 @@ func promptValid(scanner *bufio.Scanner, label, defaultVal string, validate func
 	}
 }
 
-// claudeOnlyPrompts are embedded prompts that rely on Claude Code features
-// (such as ${CLAUDE_SESSION_ID} substitution) and are not installed for
-// other agents.
+// claudeOnlyPrompts are embedded prompts written for Claude Code (its
+// command frontmatter, such as allowed-tools) and not installed for other
+// agents.
 var claudeOnlyPrompts = map[string]bool{"zen-import.md": true}
 
 // promptSupported reports whether the embedded prompt file works with ag.

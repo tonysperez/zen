@@ -107,6 +107,7 @@ Same isolation model, your own branches. `zen work new` and `zen work resume` op
 zen work                                       # list feature worktrees
 zen work new <repo> <branch>                   # create new feature worktree
 zen work new app my-feature "initial prompt"   # with Claude prompt
+zen work new app my-feature --context-file handoff.md  # long prompt, read from a file
 zen work new app my-feature --model opus       # pick Claude model
 zen work resume <name>                         # resume a feature session in new tab
 zen work resume <name> --model opus            # resume with a specific model
@@ -116,22 +117,21 @@ zen work close [name]                          # stop the agent, delete worktree
 
 Feature branches are prefixed by `branch_prefix` from config — see [docs/configuration.md](docs/configuration.md).
 
-### Promote an exploratory session
+`--context-file` copies the file into the worktree as `.zen/INITIAL_PROMPT.md` (excluded from git), and the agent reads its first prompt from there. Use it for anything longer than a line or two: a prompt given as an argument goes on the command line that opens the terminal, and tmux refuses commands longer than about 16 KB.
 
-Started digging in a regular Claude session and it turned into real work? Move the conversation into its own feature worktree instead of starting over:
+### Split work out of a Claude session
+
+When a long session turns up a piece of work that deserves its own branch, type `/zen-import` in it:
 
 ```bash
-/zen-import                                    # inside the Claude session: Claude picks the branch name
-/zen-import fix-token-refresh --carry-changes  # name it, and bring uncommitted edits along
-
-zen work import fix-token-refresh              # from a shell: newest session in this directory
-zen work import app fix-token-refresh          # name the repo when it can't be inferred
-zen work import --session <id> fix-token-refresh   # a specific session, from anywhere
+/zen-import                                    # Claude works out the sub-task, repo and branch
+/zen-import chatgpt-logging infra              # name the branch and repo
+/zen-import the token refresh fix              # say which piece of work to split out
 ```
 
-zen creates the worktree (as `zen work new` does), copies the conversation into it under a new session id, and resumes it in a new terminal tab with a short hand-off message telling Claude where it now lives. After that it is an ordinary work stream: `zen work resume`, `zen work delete` and `zen status` all see it (with Codex as the configured agent, `resume` and `status` look for Codex sessions; see below). The original session and its checkout are never modified, so you can close the old session once the new tab is up.
+Claude writes a hand-off for just that sub-task to `~/.zen/handoffs/<repo>-<branch>.md`: the goal, what's confirmed and what's inferred, where things live, the remaining steps and the ground rules. It shows you the hand-off, and once you agree, runs `zen work new --context-file` so a new session starts from it in its own worktree, branch and terminal tab. The new session gets only the hand-off, not the conversation, and the original session carries on with everything else.
 
-The repo is inferred when the session ran in any checkout of a configured repo. Uncommitted changes stay behind unless you pass `--carry-changes`, which applies tracked edits as a patch (3-way, so conflicts are left marked for you) and copies untracked files. `zen setup` installs `/zen-import` when you set it up for Claude; it is Claude-only, because it relies on Claude Code's `${CLAUDE_SESSION_ID}`. The imported conversation is a Claude session, so if your configured agent is Codex, resume it with `zen work resume <name> --agent claude` (or let `zen work resume` migrate it to Codex); `zen work delete` cleans up both agents' sessions either way.
+zen installs `/zen-import` into `~/.claude/commands` when the daemon starts and on `zen work` and `zen work new`, and `zen setup` installs it when you set zen up for Claude. It is Claude-only. zen never overwrites a command that's already there, so to pick up a newer version, delete `~/.claude/commands/zen-import.md` and run `zen work`.
 
 ### Closing finished work
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -22,12 +23,19 @@ var workCmd = &cobra.Command{
 
 var workNewCmd = &cobra.Command{
 	Use:   "new <repo> <branch> [context]",
-	Short: "Create a new feature worktree and open in iTerm2",
-	Long: `Create a new feature worktree from origin/main and open it in a new iTerm2 tab.
+	Short: "Create a new feature worktree and open it in a terminal",
+	Long: `Create a new feature worktree from origin/main and open the agent in it, in a
+new tab or window of the configured terminal.
 
-The branch will be prefixed with mgreau/ per naming convention. The branch
-name must be a single path segment: no "/", whitespace, or leading "-".
-Optionally provide a context string to use as the initial Claude prompt.`,
+The branch is prefixed with branch_prefix from ~/.zen/config.yaml, or with
+your git user.name when that is unset. The branch name must be a single
+path segment: no "/", whitespace, or leading "-".
+
+Optionally give the agent's initial prompt, either as the context argument
+or with --context-file. Use --context-file for a long prompt such as a
+hand-off: zen copies the file into the worktree (.zen/INITIAL_PROMPT.md) and
+the agent reads it from there, so the prompt never goes on the command line
+that opens the terminal.`,
 	Args: cobra.RangeArgs(2, 3),
 	RunE: runWorkNew,
 }
@@ -51,14 +59,16 @@ var workResumeCmd = &cobra.Command{
 }
 
 var (
-	workNewNoITerm  bool
-	workNewModel    string
-	workDeleteForce bool
+	workNewNoITerm     bool
+	workNewModel       string
+	workNewContextFile string
+	workDeleteForce    bool
 )
 
 func init() {
 	workNewCmd.Flags().BoolVar(&workNewNoITerm, "no-terminal", false, "Create worktree only, don't open terminal tab")
 	workNewCmd.Flags().StringVarP(&workNewModel, "model", "m", "", "Model to use (agent-specific, e.g. opus or gpt-5-codex)")
+	workNewCmd.Flags().StringVar(&workNewContextFile, "context-file", "", "Read the agent's initial prompt from this file (instead of the context argument)")
 	addAgentFlag(workNewCmd)
 	workDeleteCmd.Flags().BoolVarP(&workDeleteForce, "force", "f", false, "Skip confirmation")
 	addResumeFlags(workResumeCmd)
@@ -150,9 +160,28 @@ func validateWorkBranch(branch string) error {
 func runWorkNew(cmd *cobra.Command, args []string) error {
 	repo := args[0]
 	branch := args[1]
+	if err := validateWorkBranch(branch); err != nil {
+		return err
+	}
 	context := ""
 	if len(args) == 3 {
 		context = args[2]
+	}
+	// Read the context file before creating anything, so a bad path fails
+	// before a retry would hit "worktree already exists".
+	var contextFromFile []byte
+	if workNewContextFile != "" {
+		if context != "" {
+			return fmt.Errorf("give the initial prompt as the context argument or with --context-file, not both")
+		}
+		data, err := os.ReadFile(workNewContextFile)
+		if err != nil {
+			return fmt.Errorf("reading --context-file: %w", err)
+		}
+		if strings.TrimSpace(string(data)) == "" {
+			return fmt.Errorf("--context-file %s is empty", workNewContextFile)
+		}
+		contextFromFile = data
 	}
 
 	// Resolve the agent first: a bad --agent must fail before anything is
@@ -162,93 +191,73 @@ func runWorkNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	ensureImportPrompt()
-	target, err := newFeatureTarget(repo, branch)
-	if err != nil {
+
+	// Validate repo exists in config
+	basePath := cfg.RepoBasePath(repo)
+	if basePath == "" {
+		names := cfg.RepoNames()
+		sort.Strings(names)
+		return fmt.Errorf("unknown repo %q (configured: %s) — check ~/.zen/config.yaml", repo, strings.Join(names, ", "))
+	}
+
+	// Construct paths
+	originPath := filepath.Join(basePath, repo)
+	worktreeName := fmt.Sprintf("%s-%s", repo, branch)
+	worktreePath := filepath.Join(basePath, worktreeName)
+	prefix := cfg.GetBranchPrefix()
+	var gitBranch string
+	if prefix != "" {
+		gitBranch = fmt.Sprintf("%s/%s", prefix, branch)
+	} else {
+		gitBranch = branch
+	}
+
+	// Check if worktree already exists
+	if _, err := os.Stat(worktreePath); err == nil {
+		return fmt.Errorf("worktree already exists: %s\n  Resume with: zen work resume %s", worktreePath, branch)
+	}
+
+	ui.LogInfo(fmt.Sprintf("Fetching origin/main in %s...", repo))
+	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", worktreeName, gitBranch))
+	if err := wt.CreateFromMain(originPath, worktreePath, worktreeName, gitBranch); err != nil {
 		return err
 	}
-	if err := target.create(); err != nil {
-		return err
-	}
-	worktreePath := target.worktreePath
+
+	home := homeDir()
+	shortPath := ui.ShortenHome(worktreePath, home)
+
+	fmt.Println()
+	ui.LogSuccess(fmt.Sprintf("Created worktree: %s", shortPath))
+	fmt.Printf("  Branch: %s\n", ui.CyanText(gitBranch))
 
 	if workNewModel != "" {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(workNewModel))
 	}
 
-	return launchInWorktree(ag, worktreePath, func(a agent.Agent) string {
-		return a.StartCommand(context, workNewModel)
-	}, workNewNoITerm)
-}
+	start := func(a agent.Agent) string { return a.StartCommand(context, workNewModel) }
+	if contextFromFile != nil {
+		promptPath, err := agent.StageInitialPrompt(worktreePath, contextFromFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  Prompt: %s\n", ui.ShortenHome(promptPath, home))
+		start = func(a agent.Agent) string { return a.StartCommandFromFile(promptPath, workNewModel) }
+	}
 
-// featureTarget is where a new feature worktree goes: the paths and branch
-// name derived from a configured repo and a branch suffix.
-type featureTarget struct {
-	repo         string
-	branch       string // the suffix the user typed
-	originPath   string
-	worktreeName string
-	worktreePath string
-	gitBranch    string // branch with branch_prefix applied
-}
-
-// newFeatureTarget validates repo and branch and computes the worktree
-// location. It fails if the worktree already exists.
-func newFeatureTarget(repo, branch string) (featureTarget, error) {
-	if err := validateWorkBranch(branch); err != nil {
-		return featureTarget{}, err
-	}
-	basePath := cfg.RepoBasePath(repo)
-	if basePath == "" {
-		return featureTarget{}, fmt.Errorf("unknown repo %q — check ~/.zen/config.yaml", repo)
-	}
-	t := featureTarget{
-		repo:         repo,
-		branch:       branch,
-		originPath:   filepath.Join(basePath, repo),
-		worktreeName: fmt.Sprintf("%s-%s", repo, branch),
-		gitBranch:    branch,
-	}
-	t.worktreePath = filepath.Join(basePath, t.worktreeName)
-	if prefix := cfg.GetBranchPrefix(); prefix != "" {
-		t.gitBranch = fmt.Sprintf("%s/%s", prefix, branch)
-	}
-	if _, err := os.Stat(t.worktreePath); err == nil {
-		return featureTarget{}, fmt.Errorf("worktree already exists: %s\n  Resume with: zen work resume %s", t.worktreePath, branch)
-	}
-	return t, nil
-}
-
-// create cuts the branch from origin/main and adds the worktree.
-func (t featureTarget) create() error {
-	ui.LogInfo(fmt.Sprintf("Fetching origin/main in %s...", t.repo))
-	ui.LogInfo(fmt.Sprintf("Creating worktree %s (branch %s)...", t.worktreeName, t.gitBranch))
-	if err := wt.CreateFromMain(t.originPath, t.worktreePath, t.worktreeName, t.gitBranch); err != nil {
-		return err
-	}
-	fmt.Println()
-	ui.LogSuccess(fmt.Sprintf("Created worktree: %s", ui.ShortenHome(t.worktreePath, homeDir())))
-	fmt.Printf("  Branch: %s\n", ui.CyanText(t.gitBranch))
-	return nil
-}
-
-// launchInWorktree runs the command that command builds for ag in a new
-// terminal tab at worktreePath, or prints it when noTerminal is set. The
-// agent is prepared for launch (e.g. Codex's remote-control daemon) only
-// when a tab is actually opened.
-func launchInWorktree(ag agent.Agent, worktreePath string, command func(agent.Agent) string, noTerminal bool) error {
-	if noTerminal {
+	if workNewNoITerm {
 		fmt.Println()
 		fmt.Println(ui.BoldText("Open manually:"))
-		fmt.Printf("  cd %s && %s\n", agent.ShellQuote(worktreePath), command(ag))
+		fmt.Printf("  cd %s && %s\n", worktreePath, start(ag))
 		return nil
 	}
 
+	// Open terminal tab
 	term, err := terminal.NewTerminal(cfg.GetTerminal())
 	if err != nil {
 		return err
 	}
 
-	if err := openTab(term, worktreePath, ag, command); err != nil {
+	if err := openTab(term, worktreePath, ag, start); err != nil {
 		return err
 	}
 	fmt.Println()
