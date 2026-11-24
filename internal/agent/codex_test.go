@@ -329,3 +329,37 @@ func TestCodexShortenModel(t *testing.T) {
 		t.Errorf("ShortenModel = %q, want gpt-5-codex", got)
 	}
 }
+
+func TestReviewPromptDirections(t *testing.T) {
+	claude := New(Claude, "claude")
+	if got := claude.ReviewPrompt("", ""); got != "/review-pr" {
+		t.Errorf("Claude ReviewPrompt(no directions) = %q", got)
+	}
+	got := claude.ReviewPrompt("", "no public IPs")
+	if !strings.HasPrefix(got, "/review-pr Reviewer directions") || !strings.HasSuffix(got, ": no public IPs") {
+		t.Errorf("Claude ReviewPrompt(directions) = %q", got)
+	}
+
+	codex := New(Codex, "codex")
+	wt := t.TempDir()
+	base := codex.ReviewPrompt(wt, "")
+	if strings.Contains(base, "Reviewer directions") {
+		t.Errorf("Codex ReviewPrompt(no directions) mentions directions: %q", base)
+	}
+	if got := codex.ReviewPrompt(wt, "no public IPs"); !strings.HasPrefix(got, base+"\n\nReviewer directions") || !strings.HasSuffix(got, ": no public IPs") {
+		t.Errorf("Codex ReviewPrompt(directions) = %q", got)
+	}
+}
+
+func TestResumeCommandPrompt(t *testing.T) {
+	p := DirectionsPrompt("don't allow public IPs")
+	if DirectionsPrompt("") != "" {
+		t.Error("DirectionsPrompt(empty) should be empty")
+	}
+	if got := New(Claude, "claude").(PromptResumer).ResumeWithPrompt("abc", "", p); got != "claude --resume 'abc' "+shellQuote(p) {
+		t.Errorf("Claude ResumeCommand(prompt) = %q", got)
+	}
+	if got := New(Codex, "codex").(PromptResumer).ResumeWithPrompt("abc", "gpt-5", p); got != "codex resume 'abc' -m 'gpt-5' "+shellQuote(p) {
+		t.Errorf("Codex ResumeCommand(prompt) = %q", got)
+	}
+}

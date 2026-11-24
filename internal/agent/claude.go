@@ -115,7 +115,14 @@ func (a *claudeAgent) ContextPresent(worktreePath string) bool {
 
 // ReviewPrompt uses the installed /review-pr slash command. Claude reads
 // CLAUDE.local.md automatically, so the prompt need not reference it.
-func (a *claudeAgent) ReviewPrompt(string) string { return "/review-pr" }
+// Directions travel as the command's arguments, labelled so the agent does not
+// mistake them for a PR number, even with an older installed review-pr.md.
+func (a *claudeAgent) ReviewPrompt(_, directions string) string {
+	if directions == "" {
+		return "/review-pr"
+	}
+	return "/review-pr " + directionsLabel + directions
+}
 
 func (a *claudeAgent) PromptsDir() string {
 	return filepath.Join(os.Getenv("HOME"), ".claude", "commands")

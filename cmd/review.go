@@ -18,15 +18,25 @@ import (
 )
 
 var reviewCmd = &cobra.Command{
-	Use:   "review [pr-number]",
+	Use:   "review <pr-number> [directions]",
 	Short: "Create or resume a PR review worktree",
 	Long: `Manage PR review worktrees.
 
 Usage:
-  zen review <pr-number>           Create worktree + open iTerm tab
-  zen review resume <pr-number>    Resume existing session in a terminal tab
-  zen review delete <pr-number>    Delete a PR review worktree`,
+  zen review <pr-number> [directions]  Create worktree + open terminal tab
+  zen review resume <pr-number>        Resume existing session in a terminal tab
+  zen review delete <pr-number>        Delete a PR review worktree
+
+An optional quoted string after the PR number is passed to the agent as
+reviewer directions: decisions you have already made, or areas to look at
+closely.
+
+  zen review 1234 "I've decided not to allow public IPs here"
+
+If the review session already exists, the directions are sent to it as the
+next message when it resumes.`,
 	DisableFlagParsing: false,
+	Args:               cobra.MaximumNArgs(2),
 	RunE:               runReview,
 }
 
@@ -64,8 +74,12 @@ func init() {
 }
 
 func runReview(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
+	if len(args) == 0 {
 		return cmd.Help()
+	}
+	directions := ""
+	if len(args) == 2 {
+		directions = strings.TrimSpace(args[1])
 	}
 	prNumber, err := strconv.Atoi(args[0])
 	if err != nil {
@@ -108,6 +122,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 			if reviewModel != "" {
 				resumeModel = reviewModel
 			}
+			resumeDirections = directions
 			return openReviewTab(worktreePath, worktreeName)
 		}
 	}
@@ -139,12 +154,15 @@ func runReview(cmd *cobra.Command, args []string) error {
 	if reviewModel != "" {
 		fmt.Printf("  Model:  %s\n", ui.CyanText(reviewModel))
 	}
+	if directions != "" {
+		fmt.Printf("  Directions: %s\n", ui.DimText(directions))
+	}
 
 	// Ensure the /review-pr prompt is installed for the chosen agent
 	ensurePrompts(ag)
 
 	launchCmd := func(a agent.Agent) string {
-		return a.StartCommand(a.ReviewPrompt(result.WorktreePath), reviewModel)
+		return a.StartCommand(a.ReviewPrompt(result.WorktreePath, directions), reviewModel)
 	}
 
 	if reviewNoITerm {

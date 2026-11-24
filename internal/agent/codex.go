@@ -72,6 +72,12 @@ func (a *codexAgent) ResumeCommand(sessionID, model string) string {
 	return cmd
 }
 
+// ResumeWithPrompt is ResumeCommand plus a first message for the resumed
+// session; codex resume takes it as a trailing positional argument.
+func (a *codexAgent) ResumeWithPrompt(sessionID, model, prompt string) string {
+	return a.ResumeCommand(sessionID, model) + " " + shellQuote(prompt)
+}
+
 // AgentsCommand opens Codex's agent command center, to browse and switch
 // sessions.
 func (a *codexAgent) AgentsCommand() string { return a.bin + " agents" }
@@ -144,12 +150,16 @@ func (a *codexAgent) ContextPresent(worktreePath string) bool {
 // "/review-pr" CLI argument would be sent as literal prompt text. The
 // side-file is also not auto-loaded by Codex, so it must be named explicitly;
 // even for AGENTS.md naming it keeps the instruction unambiguous.
-func (a *codexAgent) ReviewPrompt(worktreePath string) string {
+func (a *codexAgent) ReviewPrompt(worktreePath, directions string) string {
 	ref := a.ContextFile()
 	if _, err := os.Stat(filepath.Join(worktreePath, codexSideContextFile)); err == nil {
 		ref = codexSideContextFile
 	}
-	return fmt.Sprintf("Review this pull request. The PR details and review checklist are in %s — read the changed files it lists, then give your review.", ref)
+	prompt := fmt.Sprintf("Review this pull request. The PR details and review checklist are in %s — read the changed files it lists, then give your review.", ref)
+	if directions != "" {
+		prompt += "\n\n" + directionsLabel + directions
+	}
+	return prompt
 }
 
 func (a *codexAgent) PromptsDir() string {

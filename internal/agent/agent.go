@@ -76,8 +76,9 @@ type Agent interface {
 	// implementation); Codex uses a sentinel to disambiguate AGENTS.md.
 	ContextPresent(worktreePath string) bool
 	// ReviewPrompt returns the initial prompt used to start a PR review in a
-	// worktree whose context has already been injected.
-	ReviewPrompt(worktreePath string) string
+	// worktree whose context has already been injected. Non-empty directions
+	// (the reviewer's own focus areas or decisions) are included in it.
+	ReviewPrompt(worktreePath, directions string) string
 
 	// PromptsDir returns the directory custom slash-command prompts live in.
 	PromptsDir() string
