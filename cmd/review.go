@@ -26,6 +26,7 @@ Usage:
   zen review <pr-number> [directions]  Create worktree + open terminal tab
   zen review resume <pr-number>        Resume existing session in a terminal tab
   zen review delete <pr-number>        Delete a PR review worktree
+  zen review close [pr-number]         Stop the agent, delete the worktree, close its tmux window
 
 An optional quoted string after the PR number is passed to the agent as
 reviewer directions: decisions you have already made, or areas to look at
