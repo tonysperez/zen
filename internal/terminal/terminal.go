@@ -159,8 +159,12 @@ func (t *MacOSTerminal) OpenTab(workDir, command string) (Outcome, error) {
 }
 
 // TmuxTerminal opens each session in a window of the current tmux session,
-// reusing the window zen already opened for the worktree.
-type TmuxTerminal struct{}
+// reusing the window zen already opened for the worktree. With Session set
+// (tmux.session), new windows open in that session instead, in the
+// background, and zen need not run inside tmux.
+type TmuxTerminal struct {
+	Session string
+}
 
 func (t *TmuxTerminal) Name() string {
 	return "tmux"
@@ -169,11 +173,30 @@ func (t *TmuxTerminal) Name() string {
 func (t *TmuxTerminal) Unit() string { return "window" }
 
 func (t *TmuxTerminal) OpenTab(workDir, command string) (Outcome, error) {
+	if t.Session != "" {
+		return tmuxOutcome(tmux.OpenWindowIn(t.Session, workDir, command))
+	}
 	return tmuxOutcome(tmux.OpenWindow(workDir, command))
 }
 
 func (t *TmuxTerminal) OpenTabInBackground(workDir, command string) (Outcome, error) {
+	if t.Session != "" {
+		return tmuxOutcome(tmux.OpenWindowIn(t.Session, workDir, command))
+	}
 	return tmuxOutcome(tmux.OpenWindowDetached(workDir, command))
+}
+
+// FromConfig creates the terminal cfg names, with its tmux session when the
+// terminal is tmux.
+func FromConfig(cfg *config.Config) (Terminal, error) {
+	term, err := NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return nil, err
+	}
+	if t, ok := term.(*TmuxTerminal); ok {
+		t.Session = cfg.Tmux.Session
+	}
+	return term, nil
 }
 
 func tmuxOutcome(o tmux.Outcome, err error) (Outcome, error) {

@@ -51,18 +51,29 @@ const (
 // such as the agent, is still running there, zen only switches to it and
 // command is not run.
 func OpenWindow(workDir, command string) (Outcome, error) {
-	return open(workDir, command, false)
+	return open("", workDir, command, false)
 }
 
 // OpenWindowDetached is OpenWindow without switching to the window. It is for
 // windows opened in the background, such as by the daemon, so they do not
 // take focus from the window the user is typing in.
 func OpenWindowDetached(workDir, command string) (Outcome, error) {
-	return open(workDir, command, true)
+	return open("", workDir, command, true)
 }
 
-func open(workDir, command string, detached bool) (Outcome, error) {
-	if os.Getenv("TMUX") == "" {
+// OpenWindowIn is OpenWindowDetached for a named session (tmux.session): a
+// new window opens in session, which is created detached when it does not
+// exist, instead of in the session zen runs in. It works outside tmux too.
+// It never switches a client: the session collects windows for something
+// other than the terminal you are typing in. An existing window for workDir
+// is reused wherever it is, as with OpenWindow. An empty session is
+// OpenWindowDetached.
+func OpenWindowIn(session, workDir, command string) (Outcome, error) {
+	return open(session, workDir, command, true)
+}
+
+func open(session, workDir, command string, detached bool) (Outcome, error) {
+	if session == "" && os.Getenv("TMUX") == "" {
 		return 0, ErrNotInTmux
 	}
 	workDir = filepath.Clean(workDir)
@@ -70,7 +81,12 @@ func open(workDir, command string, detached bool) (Outcome, error) {
 
 	windows, err := listWindows()
 	if err != nil {
-		return 0, err
+		if session == "" {
+			return 0, err
+		}
+		// Outside tmux there may be no server yet; creating the session
+		// below starts one.
+		windows = nil
 	}
 	if w, ok := findWindow(windows, workDir); ok {
 		allowPassthrough(w.ID) // for windows opened before zen set it
@@ -99,16 +115,21 @@ func open(workDir, command string, detached bool) (Outcome, error) {
 		return Reused, nil
 	}
 
-	// Only stdout carries the window ID: a warning on stderr must not end up
-	// in the -t target below.
-	var stderr strings.Builder
-	cmd := exec.Command("tmux", windowArgs(workDir, command, shell, detached)...)
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, fmt.Errorf("tmux new-window: %w: %s", err, stderr.String())
+	args := windowArgs(workDir, command, shell, detached)
+	if session != "" {
+		args = sessionWindowArgs(session, workDir, command, shell)
+		if run("has-session", "-t", "="+session) != nil {
+			args = sessionArgs(session, workDir, command, shell)
+		}
 	}
-	id := strings.TrimSpace(string(out))
+	id, err := newWindow(args)
+	if err != nil && session != "" && args[0] == "new-session" {
+		// Another zen may have created the session in the meantime.
+		id, err = newWindow(sessionWindowArgs(session, workDir, command, shell))
+	}
+	if err != nil {
+		return 0, err
+	}
 	if err := run("set-option", "-w", "-t", id, WorktreeOption, workDir); err != nil {
 		// An untagged window cannot be found again, so the next open would
 		// start a second agent in the same worktree. Close it instead: the
@@ -152,6 +173,38 @@ func windowArgs(workDir, command, shell string, detached bool) []string {
 	if detached {
 		args = append(args, "-d")
 	}
+	args = append(args, "-P", "-F", "#{window_id}", "-n", filepath.Base(workDir), "-c", workDir)
+	return append(args, shellArgs(command, shell)...)
+}
+
+// newWindow runs a tmux command that creates a window and prints its ID.
+func newWindow(args []string) (string, error) {
+	// Only stdout carries the window ID: a warning on stderr must not end up
+	// in a -t target.
+	var stderr strings.Builder
+	cmd := exec.Command("tmux", args...)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("tmux %s: %w: %s", args[0], err, stderr.String())
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// sessionWindowArgs builds the new-window arguments that add a detached
+// window to session. "=" makes tmux match the session name exactly rather
+// than as a prefix, and the trailing ":" picks the next free window index.
+func sessionWindowArgs(session, workDir, command, shell string) []string {
+	args := []string{"new-window", "-d", "-t", "=" + session + ":"}
+	args = append(args, "-P", "-F", "#{window_id}", "-n", filepath.Base(workDir), "-c", workDir)
+	return append(args, shellArgs(command, shell)...)
+}
+
+// sessionArgs builds the new-session arguments that create session detached,
+// with the worktree's window as its first window. A detached session is one
+// zen's session-created hook leaves alone (see SetUpSession).
+func sessionArgs(session, workDir, command, shell string) []string {
+	args := []string{"new-session", "-d", "-s", session}
 	args = append(args, "-P", "-F", "#{window_id}", "-n", filepath.Base(workDir), "-c", workDir)
 	return append(args, shellArgs(command, shell)...)
 }

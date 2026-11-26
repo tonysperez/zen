@@ -76,6 +76,7 @@ tmux:
   first_window_command: zen inbox
   agents_window: false
   agents_window_dir: ~/git
+  session: ""            # open worktree windows in this session instead (see "Terminal")
 
 # Run a command for each daemon notification, e.g. to push it to your phone.
 # See "Push notifications" below.
@@ -203,7 +204,21 @@ runs in, named after the worktree directory. It suits a remote host reached
 over ssh, such as a cloud workstation, where there is no terminal application
 to drive. The command runs through your login shell (`$SHELL -l -c`), and the
 window keeps a shell in the worktree when the agent exits. Outside tmux, zen
-reports an error; use `--no-terminal` there instead.
+reports an error; use `--no-terminal` there instead, or set `tmux.session`.
+
+To collect sessions in one place, name a tmux session:
+
+```yaml
+tmux:
+  session: workers
+```
+
+New windows then open in `workers` instead of the session zen runs in, in the
+background (zen never switches your client to them), and zen creates the
+session detached if it does not exist (`tmux attach -t workers` to look). This
+works outside tmux too, which covers the daemon and scripts. An existing window
+for the worktree is still reused wherever it is. When `terminal` is unset,
+setting `tmux.session` makes it `tmux`. The name may not contain `:` or `.`.
 
 zen tags each window it opens with the window option `@zen-worktree`, so one
 worktree gets one window. Opening a worktree that already has a window, as

@@ -70,6 +70,10 @@ type TmuxConfig struct {
 	// AgentsWindowDir is the Agents window's working directory. Empty means
 	// ~/git, so the agent doesn't ask to trust your home directory each time.
 	AgentsWindowDir string `yaml:"agents_window_dir,omitempty"`
+	// Session, when set, is the tmux session zen opens worktree windows in,
+	// created detached if missing, instead of the session zen runs in. It
+	// also lets terminal: tmux work when zen runs outside tmux.
+	Session string `yaml:"session,omitempty"`
 }
 
 // DefaultAgentsWindowDir is the Agents window's directory unless
@@ -482,7 +486,7 @@ func finish(cfg *Config) (*Config, error) {
 		return nil, fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", cfg.Agent)
 	}
 	if cfg.Terminal == "" {
-		cfg.Terminal = defaultTerminal()
+		cfg.Terminal = defaultTerminal(cfg.Tmux.Session)
 	}
 	switch cfg.Terminal {
 	case "iterm", "ghostty", "kitty", "macos", "tmux":
@@ -496,6 +500,10 @@ func finish(cfg *Config) (*Config, error) {
 	}
 	if seq := cfg.Notify.GetTerminalSequence(); !slices.Contains(tmux.Sequences(), seq) {
 		return nil, fmt.Errorf("invalid notify.terminal_sequence %q: must be auto, osc777, or osc9", seq)
+	}
+	// tmux reads ":" and "." in a target as window and pane separators.
+	if s := cfg.Tmux.Session; strings.ContainsAny(s, ":.") || (s != "" && strings.TrimSpace(s) == "") {
+		return nil, fmt.Errorf("invalid tmux.session %q: must be a non-blank name without \":\" or \".\"", s)
 	}
 	switch cfg.Slack.Route {
 	case "", SlackRouteAgent:
@@ -577,9 +585,10 @@ func (c *Config) GetTerminal() string {
 
 // defaultTerminal is the terminal used when the config names none: tmux when
 // zen runs inside a tmux session, such as on a workstation reached over ssh
-// with no terminal application to drive, and iTerm otherwise, as before.
-func defaultTerminal() string {
-	if os.Getenv("TMUX") != "" {
+// with no terminal application to drive, or when tmux.session names one, and
+// iTerm otherwise, as before.
+func defaultTerminal(tmuxSession string) string {
+	if os.Getenv("TMUX") != "" || tmuxSession != "" {
 		return "tmux"
 	}
 	return "iterm"

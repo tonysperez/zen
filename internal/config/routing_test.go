@@ -96,6 +96,25 @@ func TestSlackRoute(t *testing.T) {
 	}
 }
 
+func TestTmuxSession(t *testing.T) {
+	t.Setenv("TMUX", "")
+	cfg := mustParse(t, "tmux:\n  session: workers\n  agents_window: true\n")
+	if cfg.Tmux.Session != "workers" || cfg.GetTerminal() != "tmux" || !cfg.Tmux.AgentsWindow {
+		t.Errorf("tmux.session = %q, terminal = %q", cfg.Tmux.Session, cfg.GetTerminal())
+	}
+	if cfg := mustParse(t, "terminal: kitty\ntmux:\n  session: workers\n"); cfg.GetTerminal() != "kitty" {
+		t.Errorf("explicit terminal = %q, want kitty", cfg.GetTerminal())
+	}
+	if cfg := mustParse(t, ""); cfg.Tmux.Session != "" || cfg.GetTerminal() != "iterm" {
+		t.Errorf("unset: tmux.session = %q, terminal = %q", cfg.Tmux.Session, cfg.GetTerminal())
+	}
+	for _, bad := range []string{"work:ers", "work.ers", `" "`} {
+		if _, err := Parse([]byte(minimalRepos + "tmux:\n  session: " + bad + "\n")); err == nil || !strings.Contains(err.Error(), "tmux.session") {
+			t.Errorf("tmux.session %s: Parse() error = %v, want a tmux.session error", bad, err)
+		}
+	}
+}
+
 func TestNotifyEventsAcceptsSlackTask(t *testing.T) {
 	cfg := mustParse(t, "notify:\n  events: [slack-task, session-waiting]\n")
 	if len(cfg.Notify.Events) != 2 {
