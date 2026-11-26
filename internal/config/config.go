@@ -217,6 +217,89 @@ type SlackConfig struct {
 	RedirectPort int    `yaml:"redirect_port"` // localhost port for the OAuth redirect, default 8765
 	CompletionDM *bool  `yaml:"completion_dm"` // DM the user when a Slack-started session goes idle, default true
 	Route        string `yaml:"route"`         // SlackRouteAgent (default) or SlackRouteEvent
+
+	// Lead channel: the one Slack conversation a lead agent session and the
+	// user talk through (zen slack post, and slack-message events).
+	LeadChannel      string `yaml:"lead_channel,omitempty"`       // channel ID (C…, G…) or DM ID (D…); empty turns the lead channel off
+	LeadPollInterval string `yaml:"lead_poll_interval,omitempty"` // default "30s"
+	LeadPrefix       string `yaml:"lead_prefix,omitempty"`        // put before every zen slack post, default ":robot_face: "
+	LeadNotify       string `yaml:"lead_notify,omitempty"`        // LeadNotifyNone (default), LeadNotifyCommand or LeadNotifyReminder
+}
+
+// What zen slack post --notify does (slack.lead_notify).
+const (
+	LeadNotifyNone     = "none"
+	LeadNotifyCommand  = "command"  // run notify.command as a lead-message notification
+	LeadNotifyReminder = "reminder" // a Slack reminder due in a minute, which Slackbot delivers as a notified DM
+)
+
+// DefaultLeadPrefix starts every message zen slack post sends, so the lead
+// channel poller can tell zen's posts from the user's even before it has
+// recorded their timestamps.
+const DefaultLeadPrefix = ":robot_face: "
+
+// leadChannelID is what a Slack conversation ID looks like: a public (C) or
+// private (G, or C on newer workspaces) channel, or a DM (D).
+var leadChannelID = regexp.MustCompile(`^[CGD][A-Z0-9]{6,}$`)
+
+// GetLeadPrefix returns the prefix zen slack post adds, defaulting to
+// DefaultLeadPrefix.
+func (s SlackConfig) GetLeadPrefix() string {
+	if s.LeadPrefix != "" {
+		return s.LeadPrefix
+	}
+	return DefaultLeadPrefix
+}
+
+// GetLeadNotify returns slack.lead_notify, defaulting to LeadNotifyNone.
+func (s SlackConfig) GetLeadNotify() string {
+	if s.LeadNotify != "" {
+		return s.LeadNotify
+	}
+	return LeadNotifyNone
+}
+
+// LeadPollIntervalDuration returns how often the daemon reads the lead
+// channel, defaulting to 30 seconds.
+func (s SlackConfig) LeadPollIntervalDuration() time.Duration {
+	if s.LeadPollInterval != "" {
+		if d, err := time.ParseDuration(s.LeadPollInterval); err == nil && d >= minLeadPollInterval {
+			return d
+		}
+	}
+	return 30 * time.Second
+}
+
+// minLeadPollInterval keeps the lead poller well inside Slack's rate limits
+// for conversations.history and conversations.replies.
+const minLeadPollInterval = 5 * time.Second
+
+// validateLead checks the lead channel settings. n is the notify config,
+// which lead_notify: command needs.
+func (s SlackConfig) validateLead(n NotifyConfig) error {
+	if s.LeadChannel != "" && !leadChannelID.MatchString(s.LeadChannel) {
+		return fmt.Errorf("invalid slack.lead_channel %q: must be a Slack channel or DM ID such as C0123456789, not a #name", s.LeadChannel)
+	}
+	if s.LeadPollInterval != "" {
+		d, err := time.ParseDuration(s.LeadPollInterval)
+		if err != nil || d < minLeadPollInterval {
+			return fmt.Errorf("invalid slack.lead_poll_interval %q: must be a duration of at least %s", s.LeadPollInterval, minLeadPollInterval)
+		}
+	}
+	if s.LeadPrefix != "" && strings.TrimSpace(s.LeadPrefix) == "" {
+		return fmt.Errorf("invalid slack.lead_prefix %q: must not be blank", s.LeadPrefix)
+	}
+	switch s.LeadNotify {
+	case "", LeadNotifyNone, LeadNotifyReminder:
+	case LeadNotifyCommand:
+		takes := n.Command != "" && (len(n.Events) == 0 || slices.Contains(n.Events, notify.EventLeadMessage))
+		if s.LeadChannel != "" && !takes {
+			return fmt.Errorf("slack.lead_notify %q needs a notify.command that takes %s", LeadNotifyCommand, notify.EventLeadMessage)
+		}
+	default:
+		return fmt.Errorf("invalid slack.lead_notify %q: must be %q, %q or %q", s.LeadNotify, LeadNotifyNone, LeadNotifyCommand, LeadNotifyReminder)
+	}
+	return nil
 }
 
 // Slack routes: what the watcher does with a flagged thread.
@@ -516,6 +599,9 @@ func finish(cfg *Config) (*Config, error) {
 		}
 	default:
 		return nil, fmt.Errorf("invalid slack.route %q: must be %q or %q", cfg.Slack.Route, SlackRouteAgent, SlackRouteEvent)
+	}
+	if err := cfg.Slack.validateLead(cfg.Notify); err != nil {
+		return nil, err
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)

@@ -658,3 +658,56 @@ func TestLoadTerminalEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestSlackLeadDefaults(t *testing.T) {
+	s := SlackConfig{}
+	if got := s.GetLeadPrefix(); got != ":robot_face: " {
+		t.Errorf("GetLeadPrefix default = %q", got)
+	}
+	if got := s.GetLeadNotify(); got != LeadNotifyNone {
+		t.Errorf("GetLeadNotify default = %q", got)
+	}
+	if d := s.LeadPollIntervalDuration(); d != 30*time.Second {
+		t.Errorf("LeadPollIntervalDuration default = %v", d)
+	}
+	s = SlackConfig{LeadPrefix: "[lead] ", LeadNotify: LeadNotifyReminder, LeadPollInterval: "1m"}
+	if s.GetLeadPrefix() != "[lead] " || s.GetLeadNotify() != LeadNotifyReminder || s.LeadPollIntervalDuration() != time.Minute {
+		t.Errorf("custom lead settings not used: %+v", s)
+	}
+}
+
+func TestLoadSlackLead(t *testing.T) {
+	for _, tt := range []struct {
+		name, yml string
+		wantErr   string
+	}{
+		{"unset", "slack:\n  enabled: true\n", ""},
+		{"channel without default_repo", "slack:\n  enabled: true\n  lead_channel: C0123ABCD\n", ""},
+		{"dm", "slack:\n  lead_channel: D0123ABCD\n", ""},
+		{"name not id", "slack:\n  lead_channel: '#lead'\n", "invalid slack.lead_channel"},
+		{"lowercase", "slack:\n  lead_channel: c0123abcd\n", "invalid slack.lead_channel"},
+		{"bad interval", "slack:\n  lead_channel: C0123ABCD\n  lead_poll_interval: soon\n", "invalid slack.lead_poll_interval"},
+		{"too fast", "slack:\n  lead_channel: C0123ABCD\n  lead_poll_interval: 1s\n", "invalid slack.lead_poll_interval"},
+		{"blank prefix", "slack:\n  lead_channel: C0123ABCD\n  lead_prefix: '  '\n", "invalid slack.lead_prefix"},
+		{"bad notify", "slack:\n  lead_channel: C0123ABCD\n  lead_notify: email\n", "invalid slack.lead_notify"},
+		{"reminder", "slack:\n  lead_channel: C0123ABCD\n  lead_notify: reminder\n", ""},
+		{"command without notify.command", "slack:\n  lead_channel: C0123ABCD\n  lead_notify: command\n", "needs a notify.command"},
+		{"command filtered out", "notify:\n  command: echo\n  events: [digest]\nslack:\n  lead_channel: C0123ABCD\n  lead_notify: command\n", "needs a notify.command"},
+		{"command", "notify:\n  command: echo\n  events: [lead-message, slack-message]\nslack:\n  lead_channel: C0123ABCD\n  lead_notify: command\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("ZEN_HOME", dir)
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(tt.yml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load()
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}

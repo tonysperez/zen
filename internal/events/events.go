@@ -32,6 +32,8 @@ const (
 	TypePRUpdated       = notify.EventPRUpdated     // a review worktree moved to a new GitHub head
 	TypeSessionWaiting  = notify.EventWaiting       // an agent session went from running to waiting for input
 	TypeSlackTask       = notify.EventSlackTask     // the Slack watcher picked up a flagged message
+	TypeSlackMessage    = notify.EventSlackMessage  // the user wrote in slack.lead_channel
+	TypeLeadMessage     = notify.EventLeadMessage   // zen slack post posted to slack.lead_channel
 
 	// Log-only: no notification is sent for these.
 	TypeSessionStopped = "session-stopped" // an agent session's process exited
@@ -48,6 +50,8 @@ func Types() []string {
 		TypeSessionStopped,
 		TypeReviewCleaned,
 		TypeSlackTask,
+		TypeSlackMessage,
+		TypeLeadMessage,
 	}
 	sort.Strings(t)
 	return t

@@ -27,11 +27,13 @@ const (
 	EventWaiting       = "session-waiting"
 	EventDigest        = "digest"
 	EventSlackTask     = "slack-task"
+	EventSlackMessage  = "slack-message" // the user wrote in slack.lead_channel; push only
+	EventLeadMessage   = "lead-message"  // zen slack post --notify (slack.lead_notify: command); push only
 )
 
 // Events lists every event, in a stable order.
 func Events() []string {
-	return []string{EventPRReview, EventPRUpdated, EventWorktreeReady, EventPRMerged, EventStale, EventWaiting, EventDigest, EventSlackTask}
+	return []string{EventPRReview, EventPRUpdated, EventWorktreeReady, EventPRMerged, EventStale, EventWaiting, EventDigest, EventSlackTask, EventSlackMessage, EventLeadMessage}
 }
 
 // pushTimeout bounds a push command, so a hung network call cannot stall the
@@ -325,6 +327,58 @@ func SlackTask(user, permalink, text string, eventJSON []byte) error {
 			"ZEN_EVENT_JSON=" + string(eventJSON),
 		},
 	})
+}
+
+// firstLine returns the first non-blank line of text, cut to n bytes.
+func firstLine(text string, n int) string {
+	line := strings.TrimSpace(text)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	line, _ = TruncateUTF8(line, n)
+	return line
+}
+
+// SlackMessage runs the push command for a message the user wrote in the
+// lead channel (slack.lead_channel). It is not shown on the desktop: the
+// user just wrote it. Besides the usual variables, the command gets $ZEN_URL
+// (the message's permalink), $ZEN_TEXT (the message, cut to
+// MaxSlackTaskText bytes) and $ZEN_EVENT_JSON (the slack-message event as
+// logged in events.jsonl). It reports whether the command ran.
+func SlackMessage(permalink, text string, eventJSON []byte) (bool, error) {
+	short, _ := TruncateUTF8(text, MaxSlackTaskText)
+	return push(note{
+		event:    EventSlackMessage,
+		title:    "Slack message",
+		message:  firstLine(text, 120),
+		subtitle: "in the lead channel",
+		env: []string{
+			"ZEN_URL=" + permalink,
+			"ZEN_TEXT=" + short,
+			"ZEN_EVENT_JSON=" + string(eventJSON),
+		},
+	})
+}
+
+// LeadMessage runs the push command for a lead-channel post made with zen
+// slack post --notify (slack.lead_notify: command): $ZEN_TITLE is "Lead",
+// $ZEN_MESSAGE the post's first line and $ZEN_URL its permalink. It is not
+// shown on the desktop. It reports whether the command ran: not when there
+// is none, or when notify.events leaves out lead-message.
+func LeadMessage(text, permalink string) (bool, error) {
+	return push(note{
+		event:   EventLeadMessage,
+		title:   "Lead",
+		message: firstLine(text, 200),
+		env:     []string{"ZEN_URL=" + permalink},
+	})
+}
+
+// PushWants reports whether the configured push command runs for event.
+func PushWants(event string) bool {
+	pushMu.Lock()
+	defer pushMu.Unlock()
+	return pushCommand != "" && (len(pushEvents) == 0 || slices.Contains(pushEvents, event))
 }
 
 // TruncateUTF8 cuts s to at most n bytes without splitting a rune, and
