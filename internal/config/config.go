@@ -31,6 +31,15 @@ type Config struct {
 	Slack        SlackConfig           `yaml:"slack"`
 	Events       EventsConfig          `yaml:"events"`
 	Notify       NotifyConfig          `yaml:"notify"`
+	Tmux         TmuxConfig            `yaml:"tmux"`
+}
+
+// TmuxConfig configures terminal: tmux.
+type TmuxConfig struct {
+	// Session, when set, is the tmux session new windows open in, created
+	// detached if missing, instead of the session zen runs in. It also lets
+	// terminal: tmux work when zen runs outside tmux.
+	Session string `yaml:"session"`
 }
 
 // NotifyConfig routes the daemon's notifications. By default they go to the
@@ -313,7 +322,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid agent %q: must be \"claude\" or \"codex\"", cfg.Agent)
 	}
 	if cfg.Terminal == "" {
-		cfg.Terminal = defaultTerminal()
+		cfg.Terminal = defaultTerminal(cfg.Tmux.Session)
 	}
 	switch cfg.Terminal {
 	case "iterm", "ghostty", "kitty", "macos", "tmux":
@@ -339,6 +348,10 @@ func (c *Config) validateRouting() error {
 			return fmt.Errorf("invalid notify.events entry %q: must be one of %s", t, strings.Join(events.Types(), ", "))
 		}
 	}
+	// tmux reads ":" and "." in a target as window and pane separators.
+	if strings.ContainsAny(c.Tmux.Session, ":.") || (c.Tmux.Session != "" && strings.TrimSpace(c.Tmux.Session) == "") {
+		return fmt.Errorf("invalid tmux.session %q: must be a non-blank name without \":\" or \".\"", c.Tmux.Session)
+	}
 	switch c.Slack.Route {
 	case "", SlackRouteAgent:
 	case SlackRouteEvent:
@@ -360,9 +373,10 @@ func (c *Config) GetTerminal() string {
 
 // defaultTerminal is the terminal used when the config names none: tmux when
 // zen runs inside a tmux session, such as on a workstation reached over ssh
-// with no terminal application to drive, and iTerm otherwise, as before.
-func defaultTerminal() string {
-	if os.Getenv("TMUX") != "" {
+// with no terminal application to drive, or when tmux.session names one, and
+// iTerm otherwise, as before.
+func defaultTerminal(tmuxSession string) string {
+	if os.Getenv("TMUX") != "" || tmuxSession != "" {
 		return "tmux"
 	}
 	return "iterm"

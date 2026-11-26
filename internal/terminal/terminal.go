@@ -3,6 +3,7 @@ package terminal
 import (
 	"fmt"
 
+	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/ghostty"
 	"github.com/mgreau/zen/internal/iterm"
 	"github.com/mgreau/zen/internal/kitty"
@@ -81,13 +82,29 @@ func (t *MacOSTerminal) OpenTab(workDir, command string) error {
 	return macos.OpenTab(workDir, command)
 }
 
-// TmuxTerminal opens each session as a new window in the current tmux session.
-type TmuxTerminal struct{}
+// TmuxTerminal opens each session as a new window in the current tmux
+// session, or in Session when it is set (tmux.session in config).
+type TmuxTerminal struct {
+	Session string
+}
 
 func (t *TmuxTerminal) Name() string {
 	return "tmux"
 }
 
 func (t *TmuxTerminal) OpenTab(workDir, command string) error {
-	return tmux.OpenWindow(workDir, command)
+	return tmux.OpenWindowIn(t.Session, workDir, command)
+}
+
+// FromConfig creates the terminal cfg names, with its tmux session when the
+// terminal is tmux.
+func FromConfig(cfg *config.Config) (Terminal, error) {
+	term, err := NewTerminal(cfg.GetTerminal())
+	if err != nil {
+		return nil, err
+	}
+	if t, ok := term.(*TmuxTerminal); ok {
+		t.Session = cfg.Tmux.Session
+	}
+	return term, nil
 }

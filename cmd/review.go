@@ -152,7 +152,7 @@ func runReview(cmd *cobra.Command, args []string) error {
 	}
 
 	// Open terminal tab
-	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	term, err := terminal.FromConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func openReviewTab(worktreePath, worktreeName string) error {
 		Name: worktreeName,
 		Type: wt.TypePRReview,
 	}
-	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	term, err := terminal.FromConfig(cfg)
 	if err != nil {
 		return err
 	}

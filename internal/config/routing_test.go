@@ -138,6 +138,46 @@ func TestSlackRoute(t *testing.T) {
 	}
 }
 
+func TestTmuxSession(t *testing.T) {
+	t.Run("default terminal outside tmux becomes tmux", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		cfg, err := loadYAML(t, minimalRepos+"tmux:\n  session: workers\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Tmux.Session != "workers" || cfg.GetTerminal() != "tmux" {
+			t.Errorf("tmux.session = %q, terminal = %q", cfg.Tmux.Session, cfg.GetTerminal())
+		}
+	})
+	t.Run("explicit terminal wins", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		cfg, err := loadYAML(t, minimalRepos+"terminal: kitty\ntmux:\n  session: workers\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.GetTerminal() != "kitty" {
+			t.Errorf("terminal = %q, want kitty", cfg.GetTerminal())
+		}
+	})
+	t.Run("unset keeps iterm outside tmux", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		cfg, err := loadYAML(t, minimalRepos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Tmux.Session != "" || cfg.GetTerminal() != "iterm" {
+			t.Errorf("tmux.session = %q, terminal = %q", cfg.Tmux.Session, cfg.GetTerminal())
+		}
+	})
+	for _, bad := range []string{"work:ers", "work.ers", `" "`} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			if _, err := loadYAML(t, minimalRepos+"tmux:\n  session: "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "tmux.session") {
+				t.Errorf("Load() error = %v, want a tmux.session error", err)
+			}
+		})
+	}
+}
+
 func TestEventsEnabled(t *testing.T) {
 	cfg, err := loadYAML(t, minimalRepos+"events:\n  enabled: true\n")
 	if err != nil {

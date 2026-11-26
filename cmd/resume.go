@@ -334,7 +334,7 @@ func runReviewResume(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	term, err := terminal.FromConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -355,7 +355,7 @@ func runWorkResume(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	term, err := terminal.NewTerminal(cfg.GetTerminal())
+	term, err := terminal.FromConfig(cfg)
 	if err != nil {
 		return err
 	}

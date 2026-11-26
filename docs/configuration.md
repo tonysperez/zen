@@ -36,7 +36,12 @@ agent: claude
 claude_bin: claude   # executable used when agent: claude
 codex_bin: codex     # executable used when agent: codex
 
-terminal: iterm  # or "ghostty", "kitty", "macos", or "tmux"; unset means tmux inside tmux, else iterm
+terminal: iterm  # or "ghostty", "kitty", "macos", or "tmux"; unset means tmux inside tmux (or with tmux.session), else iterm
+
+# terminal: tmux only — open windows in this session (created detached if missing)
+# instead of the one zen runs in. Unset by default.
+tmux:
+  session: workers
 
 # Prefix for feature branches created by `zen work new`.
 # If unset, falls back to `git config user.name` (spaces → hyphens), then no prefix.
@@ -175,7 +180,20 @@ runs in, named after the worktree directory. It suits a remote host reached
 over ssh, such as a cloud workstation, where there is no terminal application
 to drive. The command runs through your login shell (`$SHELL -l -c`), and the
 window keeps a shell in the worktree when the agent exits. Outside tmux, zen
-reports an error; use `--no-terminal` there instead.
+reports an error; use `--no-terminal` there instead, or set `tmux.session`.
+
+To collect sessions in one place, name a tmux session:
+
+```yaml
+tmux:
+  session: workers
+```
+
+New windows then open in `workers` instead of the session zen runs in, and zen
+creates it detached if it does not exist (attach with `tmux attach -t workers`).
+This works outside tmux too, which covers the watch daemon and the Slack
+watcher, and when `terminal` is unset, setting `tmux.session` makes it `tmux`.
+The name may not contain `:` or `.`.
 
 ## Slack task watcher
 
