@@ -141,8 +141,10 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 
 	switch {
 	case created:
-		if err := notify.WorktreeReady(prNumber, worktreePath); err != nil {
-			logf("Warning: notification failed for %s: %v", label, err)
+		if r.cfg.Notify.DesktopEnabled() {
+			if err := notify.WorktreeReady(prNumber, worktreePath); err != nil {
+				logf("Warning: notification failed for %s: %v", label, err)
+			}
 		}
 		Emit(r.cfg, events.Event{
 			Type:     events.TypeReviewPrepared,
@@ -155,8 +157,10 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		})
 		logf("Setup complete for %s (worktree: %s)", label, worktreePath)
 	case outcome == review.SyncUpdated:
-		if err := notify.PRUpdated(prNumber, pr.Title, repo); err != nil {
-			logf("Warning: update notification failed for %s: %v", label, err)
+		if r.cfg.Notify.DesktopEnabled() {
+			if err := notify.PRUpdated(prNumber, pr.Title, repo); err != nil {
+				logf("Warning: update notification failed for %s: %v", label, err)
+			}
 		}
 		Emit(r.cfg, events.Event{
 			Type:     events.TypePRUpdated,

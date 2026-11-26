@@ -30,6 +30,53 @@ type Config struct {
 	Watch        WatchConfig           `yaml:"watch"`
 	Slack        SlackConfig           `yaml:"slack"`
 	Events       EventsConfig          `yaml:"events"`
+	Notify       NotifyConfig          `yaml:"notify"`
+}
+
+// NotifyConfig routes the daemon's notifications. By default they go to the
+// desktop only, as before. Command, when set, is run through `sh -c` for each
+// event whose type is in Events, with the event JSON on stdin and
+// ZEN_EVENT_TYPE in the environment, whether or not the event log is on.
+type NotifyConfig struct {
+	Desktop *bool    `yaml:"desktop"` // default true; false silences the daemon's desktop notifications
+	Command string   `yaml:"command"` // default "": no command
+	Events  []string `yaml:"events"`  // event types Command runs for; unset means DefaultNotifyEvents
+}
+
+// DefaultNotifyEvents are the event types notify.command runs for when
+// notify.events is unset: the ones that ask for a person's attention.
+var DefaultNotifyEvents = []string{
+	events.TypeReviewRequested,
+	events.TypeSessionWaiting,
+	events.TypeSlackTask,
+}
+
+// DesktopEnabled reports whether the daemon sends desktop notifications,
+// defaulting to true.
+func (n NotifyConfig) DesktopEnabled() bool {
+	return n.Desktop == nil || *n.Desktop
+}
+
+// GetEvents returns the event types notify.command runs for. Unset means
+// DefaultNotifyEvents; an explicit empty list means none.
+func (n NotifyConfig) GetEvents() []string {
+	if n.Events == nil {
+		return append([]string(nil), DefaultNotifyEvents...)
+	}
+	return n.Events
+}
+
+// wants reports whether notify.command runs for event type t.
+func (n NotifyConfig) wants(t string) bool {
+	if n.Command == "" {
+		return false
+	}
+	for _, e := range n.GetEvents() {
+		if e == t {
+			return true
+		}
+	}
+	return false
 }
 
 // EventsConfig controls the daemon's event log, <state dir>/events.jsonl: one
@@ -52,6 +99,13 @@ type SlackConfig struct {
 	PollInterval string `yaml:"poll_interval"` // default "5m"
 	AckReaction  string `yaml:"ack_reaction"`  // reaction added on pickup, default "eyes"
 	DoneEmoji    string `yaml:"done_emoji"`    // reaction (on the original message) or a merged PR from the worktree's branch stops further completion DMs, default "done_check"
+	CompletionDM *bool  `yaml:"completion_dm"` // DM the user when a Slack-started session goes idle, default true
+}
+
+// CompletionDMEnabled reports whether the daemon DMs the user when a
+// Slack-started session goes idle, defaulting to true.
+func (s SlackConfig) CompletionDMEnabled() bool {
+	return s.CompletionDM == nil || *s.CompletionDM
 }
 
 // GetEmoji returns the configured reaction name, defaulting to "claudecode".
@@ -250,9 +304,23 @@ func Load() (*Config, error) {
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
 	}
+	if err := cfg.validateRouting(); err != nil {
+		return nil, err
+	}
 
 	cfg.expandPaths()
 	return cfg, nil
+}
+
+// validateRouting rejects notify and Slack routing values zen does not know,
+// so a typo fails at load instead of silently routing nothing.
+func (c *Config) validateRouting() error {
+	for _, t := range c.Notify.Events {
+		if !events.IsType(t) {
+			return fmt.Errorf("invalid notify.events entry %q: must be one of %s", t, strings.Join(events.Types(), ", "))
+		}
+	}
+	return nil
 }
 
 // GetTerminal returns the configured terminal type.
@@ -420,8 +488,10 @@ func EventsPath() string {
 // EventOptions says where the daemon sends an event under this config.
 func (c *Config) EventOptions() events.Options {
 	return events.Options{
-		Log:      c.Events.Enabled,
-		StateDir: StateDir(),
+		Log:          c.Events.Enabled,
+		StateDir:     StateDir(),
+		Command:      c.Notify.Command,
+		CommandTypes: c.Notify.GetEvents(),
 	}
 }
 

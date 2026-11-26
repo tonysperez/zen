@@ -13,6 +13,11 @@ import (
 // if there is anything actionable (waiting sessions or pending PR reviews).
 // Silent if everything is quiet.
 func SendDigest(cfg *config.Config) {
+	// The digest is only ever a desktop notification.
+	if !cfg.Notify.DesktopEnabled() {
+		return
+	}
+
 	// Count waiting sessions from the cached snapshot (2-minute freshness window)
 	var waitingSessions int
 	snapshot, err := ReadSessionSnapshot()

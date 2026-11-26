@@ -16,9 +16,18 @@ func zenBin() string {
 	return "zen"
 }
 
-// Send sends a desktop notification.
-// On Linux it uses notify-send (libnotify); elsewhere it uses macOS osascript.
+// Sender delivers one desktop notification. It defaults to the platform
+// notifier; tests replace it to see what would have been shown.
+var Sender = platformSend
+
+// Send sends a desktop notification through Sender.
 func Send(title, message, subtitle string) error {
+	return Sender(title, message, subtitle)
+}
+
+// platformSend sends a desktop notification.
+// On Linux it uses notify-send (libnotify); elsewhere it uses macOS osascript.
+func platformSend(title, message, subtitle string) error {
 	if runtime.GOOS == "linux" {
 		return exec.Command("notify-send", linuxNotifyArgs(title, message, subtitle)...).Run()
 	}

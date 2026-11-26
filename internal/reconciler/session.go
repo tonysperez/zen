@@ -76,9 +76,11 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 				}
 				if time.Since(lastTime) >= sessionNotifyDebounce {
 					resumeCmd := sessionResumeCmd(wt)
-					if err := notify.SessionWaiting(wt.Name, shortenedModel, resumeCmd); err != nil {
-						fmt.Printf("[%s] Session notify error for %s: %v\n",
-							time.Now().Format(time.RFC3339), wt.Name, err)
+					if cfg.Notify.DesktopEnabled() {
+						if err := notify.SessionWaiting(wt.Name, shortenedModel, resumeCmd); err != nil {
+							fmt.Printf("[%s] Session notify error for %s: %v\n",
+								time.Now().Format(time.RFC3339), wt.Name, err)
+						}
 					}
 					if SlackReadyHook != nil {
 						SlackReadyHook(wt.Path, wt.Name, resumeCmd)

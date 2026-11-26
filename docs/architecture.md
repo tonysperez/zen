@@ -125,6 +125,8 @@ Two shapes reach that prompt. History **diverged** — git refuses the fast-forw
 
 `events.Append` opens the file with `O_APPEND` and writes each line in one call, rotating to `events.jsonl.1` at 10MB. Appending never fails a reconcile: errors are logged. `zen events` reads the backup and then the current file, and `--follow` polls for growth, noticing rotation by comparing the open file with the one at the path (and truncation by size). Field reference: [configuration.md](configuration.md#event-log).
 
+`events.Emit` also runs `notify.command` for the event types in `notify.events`, independent of the log. Each run gets its own goroutine and a 10-second timeout, and a semaphore keeps at most four processes alive; past 64 queued runs, new ones are dropped and logged rather than piling up behind a hung command. The daemon waits for in-flight runs when it stops. `notify.desktop: false` gates every `notify.*` call the daemon makes (`PRReview`, `WorktreeReady`, `PRUpdated`, `SessionWaiting`, `Digest`).
+
 ## Source tree
 
 ```

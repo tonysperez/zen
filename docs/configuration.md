@@ -65,6 +65,13 @@ slack:
   default_repo: mono     # short repo name worktrees are created in
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
+  completion_dm: true     # DM you when a Slack-started session goes idle, default true
+
+# Notification routing — see "Notification routing" below.
+notify:
+  desktop: true          # daemon desktop notifications, default true
+  command: ""            # run via `sh -c` for each event in `events`, default none
+  events: [review_requested, session_waiting, slack_task]   # the default
 
 # Event log (opt-in, off by default) — see "Event log" below.
 events:
@@ -218,6 +225,26 @@ zen events --json                            # one JSON array instead of lines
 ```
 
 Output is the raw JSON lines, so it pipes into `jq`. `--follow` always streams lines.
+
+## Notification routing
+
+By default the daemon notifies you on the desktop, and the Slack watcher DMs you when a Slack-started session goes idle. When something else watches zen for you, such as a supervising agent session, you can send those notifications there instead.
+
+```yaml
+notify:
+  desktop: false
+  command: "~/bin/tell-lead"
+  events: [review_requested, session_waiting, slack_task]
+slack:
+  completion_dm: false
+```
+
+- `notify.desktop` (default `true`): `false` turns off every desktop notification the daemon sends: new review request, worktree ready, PR updated, session waiting, and the digest. CLI commands are unaffected.
+- `notify.command` (default unset): a shell command run with `sh -c` for each event whose type is listed in `notify.events`. It gets the event's JSON line (the same object as in the [event log](#event-log)) on stdin and the type in `ZEN_EVENT_TYPE`. It works whether or not `events.enabled` is on. Each run has a 10-second timeout; up to 4 run at once, in the background, so a slow command never holds up the daemon. A failure or timeout is logged in `watch.log` and otherwise ignored.
+- `notify.events` (default `[review_requested, session_waiting, slack_task]`): any of the event types in the table above. An unknown name fails config loading. `[]` runs the command for nothing.
+- `slack.completion_dm` (default `true`): `false` stops the Slack DM sent when a Slack-started session goes idle.
+
+`session_waiting` follows the desktop notification's debounce (once per 5 minutes per session), so the command is not run on every scan.
 
 ## Environment
 

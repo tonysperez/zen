@@ -358,6 +358,7 @@ func watchDaemon() error {
 		select {
 		case <-ctx.Done():
 			fmt.Printf("[%s] Watch daemon stopping\n", time.Now().Format(time.RFC3339))
+			events.Wait() // let in-flight notify.command runs finish (each is bounded by a timeout)
 			os.Remove(pidFile())
 			return nil
 
@@ -504,7 +505,9 @@ func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.In
 		if reconciler.ShouldNotifyNew(st.NotifiedNew[key], exists) {
 			fmt.Printf("[%s] New PR review request: #%d - %s (by %s)\n",
 				time.Now().Format(time.RFC3339), pr.Number, pr.Title, pr.Author.Login)
-			notify.PRReview(pr.Number, pr.Title, pr.Author.Login, short)
+			if cfg.Notify.DesktopEnabled() {
+				notify.PRReview(pr.Number, pr.Title, pr.Author.Login, short)
+			}
 			reconciler.Emit(cfg, events.Event{
 				Type: events.TypeReviewRequested,
 				Repo: short,
