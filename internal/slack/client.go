@@ -1,7 +1,8 @@
 // Package slack is a minimal Slack Web API client for zen's Slack task
-// watcher. It only implements the handful of methods the watcher needs
-// (reactions.list, conversations.replies, reactions.add, chat.postMessage,
-// chat.getPermalink, auth.test) — it is not a general-purpose Slack SDK.
+// watcher and lead channel. It only implements the handful of methods they
+// need (reactions.list, conversations.history, conversations.replies,
+// reactions.add, chat.postMessage, chat.getPermalink, reminders.add,
+// auth.test) — it is not a general-purpose Slack SDK.
 package slack
 
 import (
@@ -13,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -39,6 +41,13 @@ func NewClientWithSource(src TokenSource) *Client {
 		http:    &http.Client{Timeout: 15 * time.Second},
 		baseURL: defaultBaseURL,
 	}
+}
+
+// WithBaseURL points the client at another Web API root (it must end in
+// "/"), such as a test server.
+func (c *Client) WithBaseURL(base string) *Client {
+	c.baseURL = base
+	return c
 }
 
 // envelope is the {ok, error} shape every Slack Web API response embeds.
@@ -205,11 +214,85 @@ func (c *Client) ListReactions(ctx context.Context, emoji string, maxPages int) 
 	return hits, nil
 }
 
-// Message is a single Slack message, as returned by conversations.replies.
+// Message is a single Slack message, as returned by conversations.history
+// and conversations.replies.
 type Message struct {
 	User string `json:"user"`
 	Text string `json:"text"`
 	Ts   string `json:"ts"`
+	// Thread fields. ThreadTS is set on a thread's parent (equal to Ts) and
+	// on its replies; ReplyCount and LatestReply only on the parent.
+	ThreadTS    string `json:"thread_ts,omitempty"`
+	ReplyCount  int    `json:"reply_count,omitempty"`
+	LatestReply string `json:"latest_reply,omitempty"`
+	// Subtype is empty for an ordinary message; "thread_broadcast",
+	// "channel_join", "bot_message" and so on otherwise.
+	Subtype string `json:"subtype,omitempty"`
+	BotID   string `json:"bot_id,omitempty"`
+}
+
+// ConversationsHistory returns the channel's top-level messages (and thread
+// replies broadcast to the channel) posted after oldest, newest first,
+// across up to maxPages pages of 200. An empty oldest means no lower bound.
+func (c *Client) ConversationsHistory(ctx context.Context, channel, oldest string, maxPages int) ([]Message, error) {
+	var all []Message
+	cursor := ""
+	for page := 0; page < maxPages; page++ {
+		params := url.Values{"channel": {channel}, "limit": {"200"}}
+		if oldest != "" {
+			params.Set("oldest", oldest)
+		}
+		if cursor != "" {
+			params.Set("cursor", cursor)
+		}
+		body, err := c.get(ctx, "conversations.history", params)
+		if err != nil {
+			return nil, err
+		}
+		var resp struct {
+			Messages         []Message `json:"messages"`
+			ResponseMetadata struct {
+				NextCursor string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("parsing conversations.history response: %w", err)
+		}
+		all = append(all, resp.Messages...)
+		cursor = resp.ResponseMetadata.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	return all, nil
+}
+
+// ThreadRepliesSince returns the messages in a thread posted after oldest,
+// oldest first. Slack includes the parent message whatever oldest says; it
+// is left out here unless it is itself newer than oldest.
+func (c *Client) ThreadRepliesSince(ctx context.Context, channel, threadTS, oldest string) ([]Message, error) {
+	params := url.Values{"channel": {channel}, "ts": {threadTS}, "limit": {"200"}}
+	if oldest != "" {
+		params.Set("oldest", oldest)
+	}
+	body, err := c.get(ctx, "conversations.replies", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Messages []Message `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parsing conversations.replies response: %w", err)
+	}
+	var out []Message
+	for _, m := range resp.Messages {
+		if oldest != "" && CompareTS(m.Ts, oldest) <= 0 {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }
 
 // ConversationsReplies returns the parent message plus all replies in a thread.
@@ -249,6 +332,37 @@ func (c *Client) PostMessage(ctx context.Context, channel, text string) error {
 	_, err := c.post(ctx, "chat.postMessage", map[string]string{
 		"channel": channel,
 		"text":    text,
+	})
+	return err
+}
+
+// Post sends text to channel, as a reply in the thread threadTS when that
+// is set, and returns the new message's ts.
+func (c *Client) Post(ctx context.Context, channel, text, threadTS string) (string, error) {
+	payload := map[string]string{"channel": channel, "text": text}
+	if threadTS != "" {
+		payload["thread_ts"] = threadTS
+	}
+	body, err := c.post(ctx, "chat.postMessage", payload)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Ts string `json:"ts"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("parsing chat.postMessage response: %w", err)
+	}
+	return resp.Ts, nil
+}
+
+// AddReminder creates a Slack reminder for the signed-in user, due at due.
+// Slackbot delivers it as a DM, which Slack notifies like any other. Needs
+// the reminders:write scope.
+func (c *Client) AddReminder(ctx context.Context, text string, due time.Time) error {
+	_, err := c.post(ctx, "reminders.add", map[string]any{
+		"text": text,
+		"time": due.Unix(),
 	})
 	return err
 }
@@ -333,4 +447,40 @@ func (c *Client) Identity(ctx context.Context) (*TeamInfo, error) {
 		return nil, fmt.Errorf("parsing auth.test response: %w", err)
 	}
 	return &info, nil
+}
+
+// CompareTS orders two Slack message timestamps ("1700000000.123456"),
+// returning -1, 0 or 1. Timestamps compare by their seconds, then by their
+// fraction, so differing digit counts still order correctly.
+func CompareTS(a, b string) int {
+	as, af, _ := strings.Cut(a, ".")
+	bs, bf, _ := strings.Cut(b, ".")
+	if c := compareDigits(as, bs); c != 0 {
+		return c
+	}
+	// Fractions: pad to the same width on the right.
+	for len(af) < len(bf) {
+		af += "0"
+	}
+	for len(bf) < len(af) {
+		bf += "0"
+	}
+	return strings.Compare(af, bf)
+}
+
+func compareDigits(a, b string) int {
+	a = strings.TrimLeft(a, "0")
+	b = strings.TrimLeft(b, "0")
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+// FormatTS renders t as a Slack message timestamp.
+func FormatTS(t time.Time) string {
+	return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1000)
 }

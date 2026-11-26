@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-// UserScopes are the user-token scopes the task watcher needs. PKCE
+// UserScopes are the user-token scopes the task watcher and lead channel
+// need. reminders:write is only used by slack.lead_notify: reminder; a
+// token from before it was added lacks it until zen slack login is run
+// again. PKCE
 // (desktop-redirect) installs cannot request bot scopes, so everything zen
 // does runs as the signed-in user.
 var UserScopes = []string{
@@ -26,6 +29,7 @@ var UserScopes = []string{
 	"im:history",
 	"mpim:history",
 	"chat:write",
+	"reminders:write",
 }
 
 const (
