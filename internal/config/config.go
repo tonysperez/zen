@@ -100,6 +100,25 @@ type SlackConfig struct {
 	AckReaction  string `yaml:"ack_reaction"`  // reaction added on pickup, default "eyes"
 	DoneEmoji    string `yaml:"done_emoji"`    // reaction (on the original message) or a merged PR from the worktree's branch stops further completion DMs, default "done_check"
 	CompletionDM *bool  `yaml:"completion_dm"` // DM the user when a Slack-started session goes idle, default true
+	Route        string `yaml:"route"`         // SlackRouteAgent (default) or SlackRouteEvent
+}
+
+// Slack routes: what the watcher does with a flagged thread.
+const (
+	// SlackRouteAgent creates a worktree in default_repo and launches the
+	// agent on the thread.
+	SlackRouteAgent = "agent"
+	// SlackRouteEvent only emits a slack_task event (event log and
+	// notify.command) for something else to pick up.
+	SlackRouteEvent = "event"
+)
+
+// GetRoute returns the Slack route, defaulting to SlackRouteAgent.
+func (s SlackConfig) GetRoute() string {
+	if s.Route != "" {
+		return s.Route
+	}
+	return SlackRouteAgent
 }
 
 // CompletionDMEnabled reports whether the daemon DMs the user when a
@@ -319,6 +338,17 @@ func (c *Config) validateRouting() error {
 		if !events.IsType(t) {
 			return fmt.Errorf("invalid notify.events entry %q: must be one of %s", t, strings.Join(events.Types(), ", "))
 		}
+	}
+	switch c.Slack.Route {
+	case "", SlackRouteAgent:
+	case SlackRouteEvent:
+		// With nowhere to send the event, every flagged thread would be
+		// acked and marked seen, then dropped.
+		if c.Slack.Enabled && !c.Events.Enabled && !c.Notify.wants(events.TypeSlackTask) {
+			return fmt.Errorf("slack.route %q needs events.enabled: true, or notify.command with slack_task in notify.events", SlackRouteEvent)
+		}
+	default:
+		return fmt.Errorf("invalid slack.route %q: must be %q or %q", c.Slack.Route, SlackRouteAgent, SlackRouteEvent)
 	}
 	return nil
 }

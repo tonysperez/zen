@@ -103,6 +103,41 @@ func TestNotifyEventsRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestSlackRoute(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		want    string
+		wantErr string
+	}{
+		{"default", "", SlackRouteAgent, ""},
+		{"agent", "slack:\n  route: agent\n", SlackRouteAgent, ""},
+		{"event with log", "slack:\n  enabled: true\n  route: event\nevents:\n  enabled: true\n", SlackRouteEvent, ""},
+		{"event with command", "slack:\n  enabled: true\n  route: event\nnotify:\n  command: lead\n", SlackRouteEvent, ""},
+		{"event, watcher off", "slack:\n  route: event\n", SlackRouteEvent, ""},
+		{"event with nowhere to go", "slack:\n  enabled: true\n  route: event\n", "", "needs events.enabled"},
+		{"event, command skips slack_task", "slack:\n  enabled: true\n  route: event\nnotify:\n  command: lead\n  events: [session_waiting]\n", "", "needs events.enabled"},
+		{"unknown", "slack:\n  route: lead\n", "", `invalid slack.route "lead"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadYAML(t, minimalRepos+tt.yaml)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Slack.GetRoute(); got != tt.want {
+				t.Errorf("GetRoute() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEventsEnabled(t *testing.T) {
 	cfg, err := loadYAML(t, minimalRepos+"events:\n  enabled: true\n")
 	if err != nil {

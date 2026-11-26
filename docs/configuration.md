@@ -62,7 +62,8 @@ watch:
 slack:
   enabled: true
   emoji: claudecode      # reaction name (no colons), default "claudecode"
-  default_repo: mono     # short repo name worktrees are created in
+  default_repo: mono     # short repo name worktrees are created in (route: agent only)
+  route: agent           # "agent" (default): worktree + agent; "event": emit slack_task only
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
   completion_dm: true     # DM you when a Slack-started session goes idle, default true
@@ -184,11 +185,27 @@ When that worktree's session later goes idle ("waiting", the same signal that dr
 
 Setup:
 
-1. `slack.enabled: true` in config, plus `slack.default_repo` (required — no hardcoded default).
+1. `slack.enabled: true` in config, plus `slack.default_repo` (required for the default `route: agent` — no hardcoded default).
 2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
 3. Export the resulting token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). The token is never written to `config.yaml` or any state file.
 
 If `slack.enabled` is true but `ZEN_SLACK_TOKEN` is unset, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
+
+Set `slack.completion_dm: false` to stop the idle DM (see [Notification routing](#notification-routing)).
+
+### Handing tasks to something else: `slack.route: event`
+
+`slack.route: agent` (the default) is the behaviour above. With `slack.route: event`, pickup is the same up to the point of acting: the daemon adds the ack reaction, marks the message seen, and fetches the thread. Then, instead of creating a worktree and launching an agent, it emits a `slack_task` event: to the [event log](#event-log) when `events.enabled` is on, and to `notify.command` when `slack_task` is in `notify.events`. The event carries the channel, message timestamp, permalink, the thread author (`data.user`), and the thread text (up to 20,000 bytes, with `data.truncated` when cut). A supervisor, such as a lead agent session, decides what to do with it. No worktree is recorded for the thread, so no completion DM follows.
+
+`slack.default_repo` is only required for `route: agent`. With `route: event` and `slack.enabled: true`, config loading fails unless the event has somewhere to go: `events.enabled: true`, or a `notify.command` whose `notify.events` include `slack_task`. Any other `route` value fails config loading.
+
+```yaml
+slack:
+  enabled: true
+  route: event
+notify:
+  command: "~/bin/tell-lead"   # gets the slack_task JSON on stdin
+```
 
 ## Event log
 

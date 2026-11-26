@@ -105,6 +105,9 @@ type slackAPI interface {
 // for later manual resume. A Slack reaction is a deliberate, comparatively
 // rare signal (versus the high-volume PR-review firehose), so starting the
 // agent right away matches the intent of reacting in the first place.
+//
+// With slack.route: event it does neither, and hands the thread on as a
+// slack_task event instead (see routeToEvent).
 type SlackReconciler struct {
 	cfg        *config.Config
 	client     slackAPI
@@ -126,6 +129,10 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	channelID, messageTS, err := ParseSlackKey(key)
 	if err != nil {
 		return workqueue.NonRetriableError(err, "invalid key format")
+	}
+
+	if r.cfg.Slack.GetRoute() == config.SlackRouteEvent {
+		return r.routeToEvent(ctx, key, channelID, messageTS)
 	}
 
 	repo := r.cfg.Slack.DefaultRepo
@@ -199,6 +206,30 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	Emit(r.cfg, e)
 
 	logf("Slack task started for %s (worktree: %s)", key, worktreePath)
+	return nil
+}
+
+// routeToEvent handles a flagged thread under slack.route: event. It fetches
+// the thread as the agent route does, but creates no worktree and launches
+// nothing: it emits a slack_task event (event log and notify.command) for a
+// supervisor to act on. The ack reaction and seen-marking already happened
+// at pickup, as for the agent route. No Slack origin is recorded, so no
+// completion DM follows.
+func (r *SlackReconciler) routeToEvent(ctx context.Context, key, channelID, messageTS string) error {
+	messages, err := r.client.ConversationsReplies(ctx, channelID, messageTS)
+	if err != nil {
+		return fmt.Errorf("fetching thread: %w", err)
+	}
+	permalink, err := r.client.Permalink(ctx, channelID, messageTS)
+	if err != nil {
+		logf("Warning: failed to fetch permalink for %s: %v", key, err)
+	}
+
+	e := slackTaskEvent(channelID, messageTS, permalink, r.selfUserID, messages)
+	e.Data["route"] = config.SlackRouteEvent
+	Emit(r.cfg, e)
+
+	logf("Slack task %s handed off as a %s event", key, events.TypeSlackTask)
 	return nil
 }
 
