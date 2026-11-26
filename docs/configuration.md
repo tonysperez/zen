@@ -70,6 +70,10 @@ slack:
   client_id: "123.456"    # Slack app client ID, for zen slack login
   redirect_port: 8765     # localhost port for the sign-in redirect, default 8765
   completion_dm: true     # DM you when a Slack-started session goes idle, default true
+  lead_channel: ""        # channel or DM ID a lead agent session talks to you in; see "Lead channel"
+  lead_poll_interval: "30s"
+  lead_prefix: ":robot_face: "
+  lead_notify: none       # what zen slack post --notify does: none, command or reminder
 
 # What each new tmux session gets, with terminal: tmux. See "New tmux sessions".
 tmux:
@@ -395,17 +399,19 @@ Quote these variables, as above, rather than pasting them into the command:
 
 | Variable | Contents |
 |---|---|
-| `ZEN_EVENT` | `pr-review`, `pr-updated`, `worktree-ready`, `pr-merged`, `stale-worktrees`, `session-waiting`, `digest`, or `slack-task` |
+| `ZEN_EVENT` | `pr-review`, `pr-updated`, `worktree-ready`, `pr-merged`, `stale-worktrees`, `session-waiting`, `digest`, `slack-task`, `slack-message`, or `lead-message` |
 | `ZEN_TITLE` | The notification title |
 | `ZEN_MESSAGE` | The notification text |
 | `ZEN_SUBTITLE` | The subtitle, such as the model or the repo; may be empty |
 | `ZEN_RESUME` | The zen command that opens the worktree, for `session-waiting` and `worktree-ready` |
-| `ZEN_URL` | `slack-task` only: the thread's permalink |
-| `ZEN_TEXT` | `slack-task` only: the thread as `user: text` paragraphs, cut to 4,000 bytes |
-| `ZEN_EVENT_JSON` | `slack-task` only: the whole event as it appears in the [event log](#event-log), thread text up to 20,000 bytes |
+| `ZEN_URL` | `slack-task`, `slack-message` and `lead-message` only: the thread's or message's permalink |
+| `ZEN_TEXT` | `slack-task` and `slack-message` only: the thread as `user: text` paragraphs, or the message, cut to 4,000 bytes |
+| `ZEN_EVENT_JSON` | `slack-task` and `slack-message` only: the whole event as it appears in the [event log](#event-log), text up to 20,000 bytes |
 
 `ZEN_EVENT` can also be `slack-task`, sent with `slack.route: event` (see
-[Handing tasks to something else](#handing-tasks-to-something-else-slackroute-event)).
+[Handing tasks to something else](#handing-tasks-to-something-else-slackroute-event)),
+or `slack-message` and `lead-message` from the [lead channel](#lead-channel).
+Those two only run the command; they are never shown on the desktop.
 
 `events` limits the command to those events. A command that fails, or runs
 longer than 30 seconds, is logged in the daemon log (`zen watch logs`). The
@@ -440,6 +446,8 @@ Each line has `time` (RFC3339, UTC) and `type`, plus whichever of these apply: `
 | `session-stopped` | A running or waiting session's process exited (log only, no notification) | as `session-waiting` |
 | `review-cleaned` | Merged-review cleanup removed a review worktree (log only; `pr-merged` is the notification that a PR merged, which the daemon doesn't send today) | `repo`, `pr`, `worktree`, `sha` (PR head), `url`; `data.merged_at` |
 | `slack-task` | The Slack watcher picked up a flagged message | `url` (permalink); `data.channel`, `data.ts`, `data.permalink`, `data.user` (thread author), `data.flagged_by`, `data.text` (thread, up to 20,000 bytes), `data.route`; with `route: agent` also `repo`, `worktree`, `data.branch` |
+| `slack-message` | You wrote a message, top-level or in a thread, in `slack.lead_channel` (with a `slack-message` push) | `url` (permalink); `data.channel`, `data.ts`, `data.thread_ts` (empty for a top-level message), `data.text` (up to 20,000 bytes; `data.truncated` when cut), `data.user` |
+| `lead-message` | `zen slack post` posted to the lead channel (log only; `--notify` with `lead_notify: command` sends the `lead-message` push) | `url` (permalink); `data.channel`, `data.ts`, `data.thread_ts`, `data.text` (as posted, prefix included) |
 
 Example:
 
@@ -470,7 +478,7 @@ When that worktree's session later goes idle ("waiting", the same signal that dr
 Setup:
 
 1. `slack.enabled: true` in config, plus `slack.default_repo` (required for the default `route: agent` — no hardcoded default).
-2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these user token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
+2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these user token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`, and `reminders:write` (only used by `slack.lead_notify: reminder`; see [Lead channel](#lead-channel)).
 3. Give zen a token, in one of two ways:
    - **Sign in with OAuth (recommended).** In the app's OAuth settings, turn on PKCE and add the redirect URL `http://localhost:8765/callback`. Put the app's client ID in `slack.client_id`, then run `zen slack login`. No client secret is needed. Turning on PKCE can't be undone from the app settings; reverting it takes a request to Slack support.
    - **Paste a token.** Export a user token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). When set, it takes precedence over a stored sign-in.
@@ -492,6 +500,52 @@ notify:
   command: '~/bin/tell-lead'   # reads $ZEN_EVENT_JSON
   events: [slack-task, session-waiting]
 ```
+
+### Lead channel
+
+A lead agent session that runs your other sessions can talk to you through one Slack conversation: it posts status updates and questions there, and you answer or start requests by writing there. Set `slack.lead_channel` to that conversation's ID: a private channel only you are in, or your own DM with yourself (open it in Slack and copy the ID, `C…`/`G…` or `D…`, from the conversation details). A `#name` is refused.
+
+```yaml
+slack:
+  enabled: true
+  lead_channel: C0123456789
+  lead_notify: reminder    # optional
+notify:
+  command: '~/bin/tell-lead'   # reads $ZEN_EVENT_JSON
+  events: [slack-message, slack-task, session-waiting]
+events:
+  enabled: true
+```
+
+**Writing to the lead.** With `slack.enabled` and a sign-in, the daemon reads the channel every `slack.lead_poll_interval` (default `30s`, at least `5s`) with `conversations.history`, and reads a thread with `conversations.replies` when it has new replies. Threads stay watched for 7 days after their first message; at most 10 threads are read per poll, and the rest on the next one. Each new message you wrote there, top-level or a thread reply, becomes a `slack-message`: logged in the [event log](#event-log) with `events.enabled`, and pushed through `notify.command` when `notify.events` allows it (`$ZEN_URL`, `$ZEN_TEXT`, `$ZEN_EVENT_JSON`; never a desktop notification, since you just wrote it). Messages from anyone else, bots and join notices are ignored. The first poll after `lead_channel` is set, or changed, starts from that moment: nothing earlier is replayed. Cursors live in `slack_lead.json`. Reacting to any message with the task emoji still works as before; with `slack.route: event` it becomes a `slack-task`.
+
+**The lead writing to you.** The lead posts with `zen slack post`, which can only post to `slack.lead_channel`. It has no flag or argument that names a channel, so allowing a session to run it does not let it message anyone else, which a permission rule on a general Slack tool can't promise:
+
+```bash
+zen slack post "PR 42 is green. Merge it?"          # prints {"ts": ..., "permalink": ...}
+echo "long status" | zen slack post -                # text from standard input (also with no argument)
+zen slack post --thread 1700000000.123456 "Merged."  # reply in a thread
+zen slack post --notify "Need a decision on PR 42"   # and alert you (slack.lead_notify)
+```
+
+zen's sign-in is a user token, so zen's posts appear as you. Two things follow. First, the daemon must not read the lead's posts back as your requests: every post starts with `slack.lead_prefix` (default `:robot_face: `), and its timestamp is recorded in `slack_lead.json`; a message with a recorded timestamp, or whose text starts with the prefix, is never a `slack-message`. Don't start your own messages with the prefix. Second, Slack doesn't notify you about your own messages, so a post alone makes no sound. `--notify` adds an alert, as `slack.lead_notify` says:
+
+| `lead_notify` | `--notify` does |
+|---|---|
+| `none` (default) | Nothing. |
+| `command` | Runs `notify.command` as a `lead-message` notification: `$ZEN_TITLE` is `Lead`, `$ZEN_MESSAGE` the post's first line, `$ZEN_URL` its permalink. Config loading fails if `lead_channel` is set and no `notify.command` takes `lead-message`. |
+| `reminder` | Sets a Slack reminder for you, due in about a minute, with the text `Lead: <first line> <permalink>`. Slackbot delivers it as a DM, which Slack does notify you about. Needs the `reminders:write` user scope: add it to your Slack app and run `zen slack login` again (sign-ins from before zen asked for it lack it). Without the scope, it falls back to `command` when `notify.command` takes `lead-message`, and otherwise prints a warning. |
+
+An alert that fails never fails the post. `zen slack post` fails with a clear message when `slack.lead_channel` is unset or there is no sign-in (`zen slack login`, or `ZEN_SLACK_TOKEN`); it does not need `slack.enabled` or `slack.default_repo`. With `events.enabled`, each post is also logged as a `lead-message` event.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `slack.lead_channel` | unset (off) | Channel or DM ID the lead and you talk in |
+| `slack.lead_poll_interval` | `30s` | How often the daemon reads it (at least `5s`); read at daemon start |
+| `slack.lead_prefix` | `:robot_face: ` | Put before every `zen slack post` message; marks zen's posts |
+| `slack.lead_notify` | `none` | What `--notify` does: `none`, `command` or `reminder` |
+
+`lead_channel` and `lead_prefix` take effect on the daemon's next config reload; `lead_poll_interval` needs `zen watch stop && zen watch start`.
 
 ### Signing in with `zen slack login`
 
@@ -524,6 +578,7 @@ All state lives in `~/.zen/state/` (or `$ZEN_HOME/state/`):
 | `slack_seen.json` | Message keys already processed by the Slack task watcher |
 | `slack_origins.json` | Worktree path → originating Slack thread, for the completion DM |
 | `slack_token.json` | Rotating Slack OAuth token from `zen slack login` (mode 0600) |
+| `slack_lead.json` | Lead channel cursors, messages already reported, and the timestamps of `zen slack post` messages |
 | `events.jsonl` | Event log, when `events.enabled` is true (rotated at 10MB; previous log kept as `events.jsonl.1`) |
 
 ## Upgrading

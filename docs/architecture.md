@@ -122,6 +122,10 @@ Two shapes reach that prompt. History **diverged** — git refuses the fast-forw
 | `session-stopped` | `ScanSessions`, on running or waiting → stopped |
 | `review-cleaned` | `CleanupReconciler.Reconcile`, after `RemoveReview` succeeds |
 | `slack-task` | `SlackReconciler.Reconcile` after the agent is launched (`slack.route: agent`, log only), or `SlackReconciler.routeToEvent` in place of the worktree and agent (`slack.route: event`, which also sends the `notify.SlackTask` notification) |
+| `slack-message` | `cmd/watch.go` `pollLeadOnce`, for each event `lead.Watcher.Poll` returns (also sends the push-only `notify.SlackMessage`) |
+| `lead-message` | `cmd/slack_post.go`, after `zen slack post` posts (log only; `--notify` with `lead_notify: command` sends the push-only `notify.LeadMessage`) |
+
+**Lead channel.** `internal/lead` is the Slack conversation a lead agent session and the user talk through (`slack.lead_channel`). With the Slack watcher signed in, the daemon calls `lead.Watcher.Poll` every `slack.lead_poll_interval`. Each poll reads `conversations.history` back to the later of 7 days ago and the moment watching started (`State.Since`, set on the first poll for a channel, so nothing older is replayed). Messages newer than `State.Cursor` are new top-level messages. A thread parent whose `latest_reply` is past its per-thread cursor (`State.Threads`) is read with `conversations.replies`, at most `MaxThreadsPerPoll` threads per poll, most recent activity first; the rest keep their cursor for the next poll. Only messages by the `auth.test` user that zen did not post become `slack-message` events. zen's token is a user token, so its posts look like the user's: `zen slack post` (`lead.Poster`) prefixes each message with `slack.lead_prefix` and records its ts in `State.Posted`, and the watcher skips a message when either matches. The prefix covers the moment between the post and the record. `State.Seen` dedupes across cursor resets. Both the daemon and `zen slack post` write `slack_lead.json`, so each change goes through `lead.Update`, which holds a flock (`slack_lead.json.lock`) across load, change and atomic rename. Network calls happen outside the lock. `lead.Poster` takes the channel from config when it is made, and `zen slack post` has no channel flag or argument, so a session allowed to run it can reach only that channel.
 
 `events.Append` opens the file with `O_APPEND` and writes each line in one call, rotating to `events.jsonl.1` at 10MB. Appending never fails a reconcile: errors are logged. `zen events` reads the backup and then the current file, and `--follow` polls for growth, noticing rotation by comparing the open file with the one at the path (and truncation by size). Field reference: [configuration.md](configuration.md#event-log).
 
@@ -141,6 +145,7 @@ zen
 │   ├── github/                   # GitHub API (GraphQL + REST, 30s call timeouts)
 │   ├── iterm/                    # iTerm2 tab management via AppleScript
 │   ├── kitty/                    # kitty window management via kitty CLI (Linux + macOS)
+│   ├── lead/                     # Slack lead channel: watcher (slack-message events) + zen slack post
 │   ├── macos/                    # Terminal.app tab/window management via AppleScript
 │   ├── mcp/                      # MCP server exposing zen tools
 │   ├── notify/                   # Desktop notifications (osascript on macOS, notify-send on Linux)
@@ -148,7 +153,7 @@ zen
 │   ├── reconciler/               # Workqueue-based PR setup + cleanup + session scan + Slack task watcher
 │   ├── review/                   # Shared worktree creation logic (CLI + MCP)
 │   ├── session/                  # Shared session types + Claude session detection
-│   ├── slack/                    # Minimal Slack Web API client + OAuth (PKCE) sign-in for the task watcher
+│   ├── slack/                    # Minimal Slack Web API client + OAuth (PKCE) sign-in for the task watcher and lead channel
 │   ├── terminal/                 # Terminal backend abstraction (iterm/ghostty/kitty/macos)
 │   ├── ui/                       # Terminal formatting
 │   └── worktree/                 # Git worktree discovery + management
