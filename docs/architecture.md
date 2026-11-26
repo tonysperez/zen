@@ -111,6 +111,20 @@ Two shapes reach that prompt. History **diverged** — git refuses the fast-forw
 
 **Notifications.** A first sighting with no local worktree sends “New PR Review Request”, whether or not the author is in `authors:`. `WorktreeReady` fires after create; `PRUpdated` fires after a successful fast-forward. PRs already in the inbox when you upgrade are not re-announced (see [configuration.md](configuration.md#upgrading)). Every notification goes through `notify.deliver`, which shows it on the desktop unless `notify.desktop` is false (`notify.ConfigureDesktop`) and runs the `notify.command` push for the events in `notify.events`.
 
+**Event log.** With `events.enabled`, the daemon also records what it did in `<state dir>/events.jsonl`, through `reconciler.Emit` and the `internal/events` package. Types reuse the notify event names (`notify.Event*`) where a notification exists. The emit points sit beside the notifications, so the log and the notifications agree:
+
+| Event | Emitted from |
+|-------|--------------|
+| `pr-review` | `cmd/watch.go` `pollOnce`, where `ShouldNotifyNew` fires |
+| `worktree-ready` | `SetupReconciler.Reconcile`, after a worktree is created |
+| `pr-updated` | `SetupReconciler.Reconcile`, after a fast-forward (`review.SyncUpdated`), with the old and new SHA |
+| `session-waiting` | `ScanSessions`, on the debounced running → waiting transition |
+| `session-stopped` | `ScanSessions`, on running or waiting → stopped |
+| `review-cleaned` | `CleanupReconciler.Reconcile`, after `RemoveReview` succeeds |
+| `slack-task` | `SlackReconciler.Reconcile`, after a flagged thread is handled |
+
+`events.Append` opens the file with `O_APPEND` and writes each line in one call, rotating to `events.jsonl.1` at 10MB. Appending never fails a reconcile: errors are logged. `zen events` reads the backup and then the current file, and `--follow` polls for growth, noticing rotation by comparing the open file with the one at the path (and truncation by size). Field reference: [configuration.md](configuration.md#event-log).
+
 ## Source tree
 
 ```
@@ -122,6 +136,7 @@ zen
 │   ├── board/                    # `zen board` bubbletea TUI: live PR status view
 │   ├── config/                   # YAML config (~/.zen/config.yaml)
 │   ├── context/                  # PR-review context rendering
+│   ├── events/                   # Event log (events.jsonl): append, rotate, filter, follow
 │   ├── ghostty/                  # Ghostty tab/window management via AppleScript
 │   ├── github/                   # GitHub API (GraphQL + REST, 30s call timeouts)
 │   ├── iterm/                    # iTerm2 tab management via AppleScript

@@ -18,6 +18,7 @@ import (
 	"chainguard.dev/driftlessaf/workqueue/inmem"
 	"github.com/chainguard-dev/clog"
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/events"
 	ghpkg "github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/reconciler"
@@ -544,6 +545,19 @@ func pollOnce(ctx context.Context, st *reconciler.PollMemory, queue workqueue.In
 			if err := notify.PRReview(pr.Number, pr.Title, pr.Author.Login, short); err != nil {
 				fmt.Printf("[%s] Review notify error for #%d: %v\n", time.Now().Format(time.RFC3339), pr.Number, err)
 			}
+			reconciler.Emit(cfg, events.Event{
+				Type: events.TypeReviewRequested,
+				Repo: short,
+				PR:   pr.Number,
+				SHA:  pr.HeadRefOid,
+				URL:  pr.URL,
+				Data: map[string]any{
+					"title":       pr.Title,
+					"author":      pr.Author.Login,
+					"draft":       pr.IsDraft,
+					"auto_create": cfg.IsAuthor(pr.Author.Login),
+				},
+			})
 		}
 		if !st.NotifiedNew[key] {
 			st.NotifiedNew[key] = true

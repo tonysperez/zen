@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mgreau/zen/internal/agent"
+	"github.com/mgreau/zen/internal/events"
 	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/tmux"
 	"gopkg.in/yaml.v3"
@@ -41,6 +42,15 @@ type Config struct {
 	Slack         SlackConfig  `yaml:"slack"`
 	Notify        NotifyConfig `yaml:"notify,omitempty"`
 	Tmux          TmuxConfig   `yaml:"tmux,omitempty"`
+	Events        EventsConfig `yaml:"events,omitempty"`
+}
+
+// EventsConfig controls the daemon's event log, <state dir>/events.jsonl: one
+// JSON object per line for each review request, prepared or updated review,
+// session state change, merged-review cleanup, and Slack pickup. Off unless
+// Enabled is set.
+type EventsConfig struct {
+	Enabled bool `yaml:"enabled,omitempty"`
 }
 
 // TmuxConfig sets up each new tmux session, through the hook `zen setup
@@ -686,6 +696,19 @@ func (c *Config) IsAuthor(login string) bool {
 // StateDir returns the path to the zen state directory.
 func StateDir() string {
 	return filepath.Join(zenHome(), "state")
+}
+
+// EventsPath returns the path to the event log, <state dir>/events.jsonl.
+func EventsPath() string {
+	return events.Path(StateDir())
+}
+
+// EventOptions says where the daemon sends an event under this config.
+func (c *Config) EventOptions() events.Options {
+	return events.Options{
+		Log:      c.Events.Enabled,
+		StateDir: StateDir(),
+	}
 }
 
 // EnsureDirs creates required zen directories.

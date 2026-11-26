@@ -82,6 +82,10 @@ notify:
   command: 'curl -fsS -d "$ZEN_MESSAGE" https://ntfy.sh/<random-topic>'
   events: [session-waiting]
   desktop: true          # false: only the command, no desktop notifications
+
+# Event log (opt-in, off by default) — see "Event log" below.
+events:
+  enabled: true          # append daemon events to ~/.zen/state/events.jsonl
 ```
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
@@ -399,6 +403,42 @@ slack:
   completion_dm: false   # and no Slack DM when a Slack-started session goes idle
 ```
 
+## Event log
+
+With `events.enabled: true`, the daemon appends one JSON object per line to `~/.zen/state/events.jsonl` (or `$ZEN_HOME/state/events.jsonl`) whenever something happens that a supervisor, such as another agent session, might act on. A watcher can tail that one file instead of polling `zen inbox` and the worktrees. The log is off by default, and turning it on changes nothing else the daemon does.
+
+Each line has `time` (RFC3339, UTC) and `type`, plus whichever of these apply: `repo` (short name from `repos:`), `pr`, `worktree` (path), `session` (agent session ID), `sha`, `url`, and a small `data` object. Types use the same names as the [push notification](#push-notifications) events where there is one, so `$ZEN_EVENT` and the log agree.
+
+| Type | When | Notable fields |
+|------|------|----------------|
+| `pr-review` | First sighting of a review request with no local worktree (with the "New PR Review Request" notification) | `repo`, `pr`, `sha`, `url`; `data.title`, `data.author`, `data.draft`, `data.auto_create` (author is in `authors:`) |
+| `worktree-ready` | The daemon created a review worktree | `repo`, `pr`, `worktree`, `sha`, `url`; `data.title`, `data.author` |
+| `pr-updated` | A review worktree was fast-forwarded to a new GitHub head | `repo`, `pr`, `worktree`, `sha`; `data.old_sha`, `data.new_sha` |
+| `session-waiting` | An agent session went from running to waiting for input (once per 5 minutes per session, like the notification) | `worktree`, `session`, `pr` for reviews; `data.name`, `data.kind`, `data.model`, `data.resume` |
+| `session-stopped` | A running or waiting session's process exited (log only, no notification) | as `session-waiting` |
+| `review-cleaned` | Merged-review cleanup removed a review worktree (log only; `pr-merged` is the notification that a PR merged, which the daemon doesn't send today) | `repo`, `pr`, `worktree`, `sha` (PR head), `url`; `data.merged_at` |
+| `slack-task` | The Slack watcher picked up a flagged message | `url` (permalink); `data.channel`, `data.ts`, `data.permalink`, `data.user` (thread author), `data.flagged_by`, `data.text` (thread, up to 20,000 bytes), `data.route`; with `route: agent` also `repo`, `worktree`, `data.branch` |
+
+Example:
+
+```json
+{"time":"2026-01-02T15:04:05Z","type":"pr-review","repo":"app","pr":42,"sha":"3f2c…","url":"https://github.com/octo-sts/app/pull/42","data":{"author":"wlynch","auto_create":true,"draft":false,"title":"Fix token refresh"}}
+```
+
+Each line is written with a single `O_APPEND` write, so a reader never sees half a line. At 10MB the log is renamed to `events.jsonl.1` (replacing the previous backup) and a new one is started, as `watch.log` is.
+
+Read it with `zen events`:
+
+```bash
+zen events                                   # everything, oldest first (backup, then current)
+zen events --since 2h                        # last two hours; also takes an RFC3339 time
+zen events --type pr-review,slack-task
+zen events --since 30m --follow              # keep printing new events; survives rotation
+zen events --json                            # one JSON array instead of lines
+```
+
+Output is the raw JSON lines, so it pipes into `jq`. `--follow` always streams lines.
+
 ## Slack task watcher
 
 An opt-in daemon loop that polls for the user's own emoji reaction (`slack.emoji`, default `claudecode`) via `reactions.list`, then for each new hit: adds an ack reaction in-thread (`slack.ack_reaction`, default `eyes`), fetches the thread, creates a feature worktree in `slack.default_repo` from `origin/main`, and immediately launches the agent in a terminal tab with the thread as the initial prompt — the launched session does all the "figure out what to do" work, not the daemon. Unlike the PR-review flow, this does open a terminal tab automatically: a Slack reaction is a deliberate, comparatively rare signal, not the high-volume PR-review firehose.
@@ -446,6 +486,7 @@ All state lives in `~/.zen/state/` (or `$ZEN_HOME/state/`):
 | `slack_seen.json` | Message keys already processed by the Slack task watcher |
 | `slack_origins.json` | Worktree path → originating Slack thread, for the completion DM |
 | `slack_token.json` | Rotating Slack OAuth token from `zen slack login` (mode 0600) |
+| `events.jsonl` | Event log, when `events.enabled` is true (rotated at 10MB; previous log kept as `events.jsonl.1`) |
 
 ## Upgrading
 

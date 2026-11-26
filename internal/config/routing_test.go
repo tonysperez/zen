@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -39,6 +41,20 @@ func TestNotifyDesktopAndCompletionDMOff(t *testing.T) {
 	}
 	if cfg.Notify.Command != "tell-lead" {
 		t.Errorf("notify.command = %q", cfg.Notify.Command)
+	}
+}
+
+func TestEventsConfig(t *testing.T) {
+	t.Setenv("ZEN_HOME", t.TempDir())
+	if cfg := mustParse(t, ""); cfg.Events.Enabled || cfg.EventOptions().Log {
+		t.Error("events.enabled should default to false")
+	}
+	cfg := mustParse(t, "events:\n  enabled: true\n")
+	if opts := cfg.EventOptions(); !opts.Log || opts.StateDir != StateDir() {
+		t.Errorf("EventOptions() = %+v", opts)
+	}
+	if want := filepath.Join(os.Getenv("ZEN_HOME"), "state", "events.jsonl"); EventsPath() != want {
+		t.Errorf("EventsPath() = %q, want %q", EventsPath(), want)
 	}
 }
 

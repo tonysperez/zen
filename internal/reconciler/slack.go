@@ -12,7 +12,9 @@ import (
 
 	"chainguard.dev/driftlessaf/workqueue"
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/events"
 	ghpkg "github.com/mgreau/zen/internal/github"
+	"github.com/mgreau/zen/internal/notify"
 	slackpkg "github.com/mgreau/zen/internal/slack"
 	"github.com/mgreau/zen/internal/terminal"
 	wt "github.com/mgreau/zen/internal/worktree"
@@ -205,8 +207,43 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 			key, term.Name(), term.Unit(), worktreePath)
 		return nil
 	}
+	// Logged only: with route agent the agent is the notification, and the
+	// default (no events config) must stay as quiet as before.
+	e := slackTaskEvent(channelID, messageTS, permalink, r.selfUserID, messages)
+	e.Repo = repo
+	e.Worktree = worktreePath
+	e.Data["route"] = "agent"
+	e.Data["branch"] = gitBranch
+	Emit(r.cfg, e)
+
 	logf("Slack task started for %s (worktree: %s)", key, worktreePath)
 	return nil
+}
+
+// maxSlackTaskText caps the thread transcript carried in a slack-task event.
+const maxSlackTaskText = 20000
+
+// slackTaskEvent builds the slack-task event for a picked-up thread: where it
+// is, who started it (the parent message's author), who flagged it, and the
+// transcript, cut to maxSlackTaskText bytes.
+func slackTaskEvent(channelID, messageTS, permalink, selfUserID string, messages []slackpkg.Message) events.Event {
+	user := ""
+	if len(messages) > 0 {
+		user = messages[0].User
+	}
+	text, truncated := notify.TruncateUTF8(renderSlackThread(messages), maxSlackTaskText)
+	data := map[string]any{
+		"channel":    channelID,
+		"ts":         messageTS,
+		"permalink":  permalink,
+		"user":       user,
+		"flagged_by": selfUserID,
+		"text":       text,
+	}
+	if truncated {
+		data["truncated"] = true
+	}
+	return events.Event{Type: events.TypeSlackTask, URL: permalink, Data: data}
 }
 
 // NotifyReady sends a Slack DM back to the user when a Slack-originated
@@ -322,6 +359,14 @@ func renderSlackPrompt(permalink string, messages []slackpkg.Message) string {
 		fmt.Fprintf(&b, "Thread: %s\n\n", permalink)
 	}
 	b.WriteString("---\n\n")
+	b.WriteString(renderSlackThread(messages))
+	return b.String()
+}
+
+// renderSlackThread renders a thread as "user: text" paragraphs, skipping
+// empty messages.
+func renderSlackThread(messages []slackpkg.Message) string {
+	var b strings.Builder
 	for _, m := range messages {
 		text := strings.TrimSpace(m.Text)
 		if text == "" {
