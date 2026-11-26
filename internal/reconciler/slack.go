@@ -128,6 +128,10 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		return workqueue.NonRetriableError(err, "invalid key format")
 	}
 
+	if r.cfg.Slack.GetRoute() == config.SlackRouteEvent {
+		return r.routeToEvent(ctx, key, channelID, messageTS)
+	}
+
 	repo := r.cfg.Slack.DefaultRepo
 	if repo == "" {
 		return workqueue.NonRetriableError(
@@ -217,6 +221,42 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	Emit(r.cfg, e)
 
 	logf("Slack task started for %s (worktree: %s)", key, worktreePath)
+	return nil
+}
+
+// routeToEvent handles a flagged thread under slack.route: event. It fetches
+// the thread as the agent route does, but creates no worktree and launches
+// nothing: it logs a slack-task event and sends a slack-task notification
+// (desktop and notify.command) for a supervisor to act on. The ack reaction
+// and seen-marking already happened at pickup, as for the agent route. No
+// Slack origin is recorded, so no completion DM follows.
+func (r *SlackReconciler) routeToEvent(ctx context.Context, key, channelID, messageTS string) error {
+	messages, err := r.client.ConversationsReplies(ctx, channelID, messageTS)
+	if err != nil {
+		return fmt.Errorf("fetching thread: %w", err)
+	}
+	permalink, err := r.client.Permalink(ctx, channelID, messageTS)
+	if err != nil {
+		logf("Warning: failed to fetch permalink for %s: %v", key, err)
+	}
+
+	e := slackTaskEvent(channelID, messageTS, permalink, r.selfUserID, messages)
+	e.Data["route"] = config.SlackRouteEvent
+	e.Time = time.Now().UTC().Format(time.RFC3339)
+	Emit(r.cfg, e)
+
+	payload, err := json.Marshal(e)
+	if err != nil {
+		logf("Warning: encoding slack-task event for %s: %v", key, err)
+	}
+	user, _ := e.Data["user"].(string)
+	text, _ := e.Data["text"].(string)
+	if err := notify.SlackTask(user, permalink, text, payload); err != nil {
+		// Not retried: a retry would log and push the task a second time.
+		logf("Warning: slack-task notification for %s: %v", key, err)
+	}
+
+	logf("Slack task %s handed off (slack.route: %s)", key, config.SlackRouteEvent)
 	return nil
 }
 

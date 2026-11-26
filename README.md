@@ -238,7 +238,7 @@ With `events.enabled: true`, the daemon also appends one JSON line per review re
 
 ### Slack task watcher (opt-in)
 
-React to a Slack message with `:claudecode:` (or whatever emoji you configure) and the daemon picks it up: acks in-thread, creates a feature worktree seeded with the discussion as the initial prompt, and opens it in a terminal tab right away — unlike the PR-review flow, which only prepares worktrees silently. When that session goes idle, you get a Slack DM back with a resume command and a link to the thread. Off by default; see [docs/configuration.md](docs/configuration.md#slack-task-watcher) for setup (sign in with `zen slack login`, or set `ZEN_SLACK_TOKEN`).
+React to a Slack message with `:claudecode:` (or whatever emoji you configure) and the daemon picks it up: acks in-thread, creates a feature worktree seeded with the discussion as the initial prompt, and opens it in a terminal tab right away — unlike the PR-review flow, which only prepares worktrees silently. When that session goes idle, you get a Slack DM back with a resume command and a link to the thread. With `slack.route: event`, the daemon launches nothing and hands the thread on as a `slack-task` notification and event instead, for a supervising session to pick up. Off by default; see [docs/configuration.md](docs/configuration.md#slack-task-watcher) for setup (sign in with `zen slack login`, or set `ZEN_SLACK_TOKEN`).
 
 Manual cleanup, in case you want it. The daemon removes merged PR reviews on its own, an hour or so after merge by default. `zen cleanup` also covers work streams, and the daemon never runs it:
 

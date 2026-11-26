@@ -225,7 +225,11 @@ func watchStatus() error {
 	}
 
 	if cfg.Slack.Enabled {
-		fmt.Printf("Slack watcher: enabled (emoji: :%s:)\n", cfg.Slack.GetEmoji())
+		route := ""
+		if r := cfg.Slack.GetRoute(); r != config.SlackRouteAgent {
+			route = ", route: " + r
+		}
+		fmt.Printf("Slack watcher: enabled (emoji: :%s:%s)\n", cfg.Slack.GetEmoji(), route)
 	} else {
 		fmt.Println("Slack watcher: disabled")
 	}

@@ -121,7 +121,7 @@ Two shapes reach that prompt. History **diverged** — git refuses the fast-forw
 | `session-waiting` | `ScanSessions`, on the debounced running → waiting transition |
 | `session-stopped` | `ScanSessions`, on running or waiting → stopped |
 | `review-cleaned` | `CleanupReconciler.Reconcile`, after `RemoveReview` succeeds |
-| `slack-task` | `SlackReconciler.Reconcile`, after a flagged thread is handled |
+| `slack-task` | `SlackReconciler.Reconcile` after the agent is launched (`slack.route: agent`, log only), or `SlackReconciler.routeToEvent` in place of the worktree and agent (`slack.route: event`, which also sends the `notify.SlackTask` notification) |
 
 `events.Append` opens the file with `O_APPEND` and writes each line in one call, rotating to `events.jsonl.1` at 10MB. Appending never fails a reconcile: errors are logged. `zen events` reads the backup and then the current file, and `--follow` polls for growth, noticing rotation by comparing the open file with the one at the path (and truncation by size). Field reference: [configuration.md](configuration.md#event-log).
 

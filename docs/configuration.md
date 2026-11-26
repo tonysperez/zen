@@ -63,7 +63,8 @@ watch:
 slack:
   enabled: true
   emoji: claudecode      # reaction name (no colons), default "claudecode"
-  default_repo: mono     # short repo name worktrees are created in
+  default_repo: mono     # short repo name worktrees are created in (route: agent only)
+  route: agent           # "agent" (default): worktree + agent; "event": notify and log a slack-task only
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
   client_id: "123.456"    # Slack app client ID, for zen slack login
@@ -379,11 +380,17 @@ Quote these variables, as above, rather than pasting them into the command:
 
 | Variable | Contents |
 |---|---|
-| `ZEN_EVENT` | `pr-review`, `pr-updated`, `worktree-ready`, `pr-merged`, `stale-worktrees`, `session-waiting`, or `digest` |
+| `ZEN_EVENT` | `pr-review`, `pr-updated`, `worktree-ready`, `pr-merged`, `stale-worktrees`, `session-waiting`, `digest`, or `slack-task` |
 | `ZEN_TITLE` | The notification title |
 | `ZEN_MESSAGE` | The notification text |
 | `ZEN_SUBTITLE` | The subtitle, such as the model or the repo; may be empty |
 | `ZEN_RESUME` | The zen command that opens the worktree, for `session-waiting` and `worktree-ready` |
+| `ZEN_URL` | `slack-task` only: the thread's permalink |
+| `ZEN_TEXT` | `slack-task` only: the thread as `user: text` paragraphs, cut to 4,000 bytes |
+| `ZEN_EVENT_JSON` | `slack-task` only: the whole event as it appears in the [event log](#event-log), thread text up to 20,000 bytes |
+
+`ZEN_EVENT` can also be `slack-task`, sent with `slack.route: event` (see
+[Handing tasks to something else](#handing-tasks-to-something-else-slackroute-event)).
 
 `events` limits the command to those events. A command that fails, or runs
 longer than 30 seconds, is logged in the daemon log (`zen watch logs`). The
@@ -447,13 +454,29 @@ When that worktree's session later goes idle ("waiting", the same signal that dr
 
 Setup:
 
-1. `slack.enabled: true` in config, plus `slack.default_repo` (required — no hardcoded default).
+1. `slack.enabled: true` in config, plus `slack.default_repo` (required for the default `route: agent` — no hardcoded default).
 2. Create a Slack app (a dedicated personal one is recommended over reusing a shared org bot) with these user token scopes: `reactions:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `chat:write`.
 3. Give zen a token, in one of two ways:
    - **Sign in with OAuth (recommended).** In the app's OAuth settings, turn on PKCE and add the redirect URL `http://localhost:8765/callback`. Put the app's client ID in `slack.client_id`, then run `zen slack login`. No client secret is needed. Turning on PKCE can't be undone from the app settings; reverting it takes a request to Slack support.
    - **Paste a token.** Export a user token as `ZEN_SLACK_TOKEN` in the environment the daemon starts in (`zen watch start` inherits your shell's env). When set, it takes precedence over a stored sign-in.
 
 If `slack.enabled` is true but no token is available, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
+
+### Handing tasks to something else: `slack.route: event`
+
+`slack.route: agent` (the default) is the behaviour above. With `slack.route: event`, pickup is the same up to the point of acting: the daemon adds the ack reaction, marks the message seen, and fetches the thread. Then, instead of creating a worktree and launching an agent, it sends a `slack-task` notification (desktop, and `notify.command` when `notify.events` allows it, with the thread in `$ZEN_URL`, `$ZEN_TEXT` and `$ZEN_EVENT_JSON`; see [Push notifications](#push-notifications)) and, with `events.enabled`, logs a `slack-task` event. A supervisor, such as a lead agent session, decides what to do with it. No worktree is recorded for the thread, so no completion DM follows. With `route: agent`, the `slack-task` event is still logged when the event log is on, but no notification is sent: the agent opening is the notification.
+
+`slack.default_repo` is only required for `route: agent`. With `route: event` and `slack.enabled: true`, config loading fails if the task has nowhere to go: `notify.desktop: false`, `events.enabled` off, and no `notify.command` that takes `slack-task`. Any other `route` value fails config loading.
+
+```yaml
+slack:
+  enabled: true
+  route: event
+notify:
+  desktop: false
+  command: '~/bin/tell-lead'   # reads $ZEN_EVENT_JSON
+  events: [slack-task, session-waiting]
+```
 
 ### Signing in with `zen slack login`
 

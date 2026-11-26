@@ -212,6 +212,26 @@ type SlackConfig struct {
 	ClientID     string `yaml:"client_id"`     // Slack app client ID for zen slack login (PKCE; no secret needed)
 	RedirectPort int    `yaml:"redirect_port"` // localhost port for the OAuth redirect, default 8765
 	CompletionDM *bool  `yaml:"completion_dm"` // DM the user when a Slack-started session goes idle, default true
+	Route        string `yaml:"route"`         // SlackRouteAgent (default) or SlackRouteEvent
+}
+
+// Slack routes: what the watcher does with a flagged thread.
+const (
+	// SlackRouteAgent creates a worktree in default_repo and launches the
+	// agent on the thread.
+	SlackRouteAgent = "agent"
+	// SlackRouteEvent launches nothing: it sends a slack-task notification
+	// (desktop and notify.command) and logs a slack-task event, for
+	// something else to pick up.
+	SlackRouteEvent = "event"
+)
+
+// GetRoute returns the Slack route, defaulting to SlackRouteAgent.
+func (s SlackConfig) GetRoute() string {
+	if s.Route != "" {
+		return s.Route
+	}
+	return SlackRouteAgent
 }
 
 // CompletionDMEnabled reports whether the daemon DMs the user when a
@@ -476,6 +496,18 @@ func finish(cfg *Config) (*Config, error) {
 	}
 	if seq := cfg.Notify.GetTerminalSequence(); !slices.Contains(tmux.Sequences(), seq) {
 		return nil, fmt.Errorf("invalid notify.terminal_sequence %q: must be auto, osc777, or osc9", seq)
+	}
+	switch cfg.Slack.Route {
+	case "", SlackRouteAgent:
+	case SlackRouteEvent:
+		// With nowhere to go, every flagged thread would be acked and marked
+		// seen, then dropped.
+		pushes := cfg.Notify.Command != "" && (len(cfg.Notify.Events) == 0 || slices.Contains(cfg.Notify.Events, notify.EventSlackTask))
+		if cfg.Slack.Enabled && !cfg.Events.Enabled && !cfg.Notify.DesktopEnabled() && !pushes {
+			return nil, fmt.Errorf("slack.route %q has nowhere to send tasks: turn on events.enabled or notify.desktop, or set a notify.command that takes %s", SlackRouteEvent, notify.EventSlackTask)
+		}
+	default:
+		return nil, fmt.Errorf("invalid slack.route %q: must be %q or %q", cfg.Slack.Route, SlackRouteAgent, SlackRouteEvent)
 	}
 	if cfg.Repos == nil {
 		cfg.Repos = make(map[string]RepoConfig)
