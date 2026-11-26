@@ -65,6 +65,10 @@ slack:
   default_repo: mono     # short repo name worktrees are created in
   poll_interval: "5m"
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
+
+# Event log (opt-in, off by default) — see "Event log" below.
+events:
+  enabled: true          # append daemon events to ~/.zen/state/events.jsonl
 ```
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
@@ -179,6 +183,42 @@ Setup:
 
 If `slack.enabled` is true but `ZEN_SLACK_TOKEN` is unset, or `auth.test` fails at startup, the daemon logs a warning and runs with the Slack watcher disabled rather than failing to start.
 
+## Event log
+
+With `events.enabled: true`, the daemon appends one JSON object per line to `~/.zen/state/events.jsonl` (or `$ZEN_HOME/state/events.jsonl`) whenever something happens that a supervisor, such as another agent session, might act on. A watcher can tail that one file instead of polling `zen inbox` and the worktrees. The log is off by default, and turning it on changes nothing else the daemon does.
+
+Each line has `time` (RFC3339, UTC) and `type`, plus whichever of these apply: `repo` (short name from `repos:`), `pr`, `worktree` (path), `session` (agent session ID), `sha`, `url`, and a small `data` object.
+
+| Type | When | Notable fields |
+|------|------|----------------|
+| `review_requested` | First sighting of a review request with no local worktree (the same moment as the "New PR Review Request" notification) | `repo`, `pr`, `sha`, `url`; `data.title`, `data.author`, `data.draft`, `data.auto_create` (author is in `authors:`) |
+| `review_prepared` | The daemon created a review worktree | `repo`, `pr`, `worktree`, `sha`, `url`; `data.title`, `data.author` |
+| `pr_updated` | A review worktree was fast-forwarded to a new GitHub head | `repo`, `pr`, `worktree`, `sha`; `data.old_sha`, `data.new_sha` |
+| `session_waiting` | An agent session went from running to waiting for input (debounced to once per 5 minutes per session, like the desktop notification) | `worktree`, `session`, `pr` for reviews; `data.name`, `data.kind`, `data.model`, `data.resume` |
+| `session_stopped` | A running or waiting session's process exited | as `session_waiting` |
+| `review_cleaned` | Merged-review cleanup removed a review worktree | `repo`, `pr`, `worktree`, `sha` (PR head), `url`; `data.merged_at` |
+| `slack_task` | The Slack watcher picked up a flagged message | `url` (permalink); `data.channel`, `data.ts`, `data.permalink`, `data.user` (thread author), `data.flagged_by`, `data.text` (thread, up to 20,000 bytes), `data.route`; with `route: agent` also `repo`, `worktree`, `data.branch` |
+
+Example:
+
+```json
+{"time":"2026-01-02T15:04:05Z","type":"review_requested","repo":"app","pr":42,"sha":"3f2c…","url":"https://github.com/octo-sts/app/pull/42","data":{"author":"wlynch","auto_create":true,"draft":false,"title":"Fix token refresh"}}
+```
+
+Each line is written with a single `O_APPEND` write, so a reader never sees half a line. At 10MB the log is renamed to `events.jsonl.1` (replacing the previous backup) and a new one is started, as `watch.log` is.
+
+Read it with `zen events`:
+
+```bash
+zen events                                   # everything, oldest first (backup, then current)
+zen events --since 2h                        # last two hours; also takes an RFC3339 time
+zen events --type review_requested,slack_task
+zen events --since 30m --follow              # keep printing new events; survives rotation
+zen events --json                            # one JSON array instead of lines
+```
+
+Output is the raw JSON lines, so it pipes into `jq`. `--follow` always streams lines.
+
 ## Environment
 
 `ZEN_HOME` overrides the config/state directory (default `~/.zen`). Functional tests and a second daemon use this so they do not share `config.yaml` or `last_check.json` with a day-to-day install.
@@ -196,6 +236,7 @@ All state lives in `~/.zen/state/` (or `$ZEN_HOME/state/`):
 | `sessions.json` | Cached agent session states (updated every 10s by daemon) |
 | `slack_seen.json` | Message keys already processed by the Slack task watcher |
 | `slack_origins.json` | Worktree path → originating Slack thread, for the completion DM |
+| `events.jsonl` | Event log, when `events.enabled` is true (rotated at 10MB; previous log kept as `events.jsonl.1`) |
 
 ## Upgrading
 

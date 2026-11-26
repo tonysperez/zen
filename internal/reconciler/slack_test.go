@@ -3,10 +3,13 @@ package reconciler
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"chainguard.dev/driftlessaf/workqueue"
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/events"
 	slackpkg "github.com/mgreau/zen/internal/slack"
 )
 
@@ -367,5 +370,41 @@ func TestPruneDone_NoDoneOriginsIsNoop(t *testing.T) {
 
 	if _, ok := LoadSlackOrigins()[path]; !ok {
 		t.Error("PruneDone() should not remove an origin with no completion signal")
+	}
+}
+
+func TestSlackTaskEvent(t *testing.T) {
+	messages := []slackpkg.Message{
+		{User: "U2", Text: "can someone bump the base image?", Ts: "1.1"},
+		{User: "U3", Text: "+1", Ts: "1.2"},
+	}
+	e := slackTaskEvent("C1", "1.1", "https://example.slack.com/archives/C1/p1", "U1", messages)
+	if e.Type != events.TypeSlackTask || e.URL != "https://example.slack.com/archives/C1/p1" {
+		t.Errorf("event = %+v", e)
+	}
+	if e.Data["channel"] != "C1" || e.Data["ts"] != "1.1" || e.Data["user"] != "U2" || e.Data["flagged_by"] != "U1" {
+		t.Errorf("event data = %+v", e.Data)
+	}
+	text, _ := e.Data["text"].(string)
+	if !contains(text, "U2: can someone bump the base image?") || !contains(text, "U3: +1") {
+		t.Errorf("event text = %q", text)
+	}
+	if _, ok := e.Data["truncated"]; ok {
+		t.Error("short thread marked truncated")
+	}
+}
+
+func TestSlackTaskEventTruncates(t *testing.T) {
+	long := strings.Repeat("é", maxSlackTaskText) // 2 bytes per rune
+	e := slackTaskEvent("C1", "1.1", "", "U1", []slackpkg.Message{{User: "U2", Text: long}})
+	text := e.Data["text"].(string)
+	if len(text) > maxSlackTaskText {
+		t.Errorf("text is %d bytes, want <= %d", len(text), maxSlackTaskText)
+	}
+	if !utf8.ValidString(text) {
+		t.Error("truncation split a rune")
+	}
+	if e.Data["truncated"] != true {
+		t.Error("long thread not marked truncated")
 	}
 }

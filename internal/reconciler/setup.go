@@ -11,6 +11,7 @@ import (
 	"chainguard.dev/driftlessaf/workqueue"
 	"github.com/mgreau/zen/internal/config"
 	ctxpkg "github.com/mgreau/zen/internal/context"
+	"github.com/mgreau/zen/internal/events"
 	ghpkg "github.com/mgreau/zen/internal/github"
 	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/prcache"
@@ -99,8 +100,11 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 	}
 
 	created := false
+	oldHead := ""
 	if _, err := os.Stat(worktreePath); err != nil {
 		created = true
+	} else if h, err := wt.HEAD(worktreePath); err == nil {
+		oldHead = h
 	}
 
 	// Step 1: Ensure worktree exists and is on the GitHub head SHA.
@@ -140,11 +144,29 @@ func (r *SetupReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 		if err := notify.WorktreeReady(prNumber, worktreePath); err != nil {
 			logf("Warning: notification failed for %s: %v", label, err)
 		}
+		Emit(r.cfg, events.Event{
+			Type:     events.TypeReviewPrepared,
+			Repo:     repo,
+			PR:       prNumber,
+			Worktree: worktreePath,
+			SHA:      pr.HeadRefOid,
+			URL:      pr.URL,
+			Data:     map[string]any{"title": pr.Title, "author": pr.Author.Login},
+		})
 		logf("Setup complete for %s (worktree: %s)", label, worktreePath)
 	case outcome == review.SyncUpdated:
 		if err := notify.PRUpdated(prNumber, pr.Title, repo); err != nil {
 			logf("Warning: update notification failed for %s: %v", label, err)
 		}
+		Emit(r.cfg, events.Event{
+			Type:     events.TypePRUpdated,
+			Repo:     repo,
+			PR:       prNumber,
+			Worktree: worktreePath,
+			SHA:      pr.HeadRefOid,
+			URL:      pr.URL,
+			Data:     map[string]any{"title": pr.Title, "old_sha": oldHead, "new_sha": pr.HeadRefOid},
+		})
 		logf("Refreshed %s to %s", label, pr.HeadRefOid)
 	default:
 		logf("Worktree already current for %s", label)

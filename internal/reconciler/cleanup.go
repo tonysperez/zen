@@ -9,6 +9,7 @@ import (
 
 	"chainguard.dev/driftlessaf/workqueue"
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/events"
 	ghpkg "github.com/mgreau/zen/internal/github"
 	wt "github.com/mgreau/zen/internal/worktree"
 )
@@ -97,6 +98,16 @@ func (r *CleanupReconciler) Reconcile(ctx context.Context, key string, _ workque
 		return fmt.Errorf("remove worktree: %w", err)
 	}
 
+	data := map[string]any{"merged_at": info.MergedAt.UTC().Format(time.RFC3339)}
+	Emit(r.cfg, events.Event{
+		Type:     events.TypeReviewCleaned,
+		Repo:     repo,
+		PR:       prNumber,
+		Worktree: worktreePath,
+		SHA:      info.HeadSHA,
+		URL:      fmt.Sprintf("https://github.com/%s/pull/%d", r.cfg.RepoFullName(repo), prNumber),
+		Data:     data,
+	})
 	logf("Cleanup complete for %s", label)
 	return nil
 }

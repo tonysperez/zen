@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"chainguard.dev/driftlessaf/workqueue/inmem"
 	"github.com/mgreau/zen/internal/agent"
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/events"
 	ghpkg "github.com/mgreau/zen/internal/github"
 )
 
@@ -185,6 +187,66 @@ func TestScanMergedPRs(t *testing.T) {
 			t.Error("work stream mono-fix-pr-3 was looked up as a review of PR 3")
 		}
 	}
+}
+
+func TestCleanupReconcile_EmitsReviewCleaned(t *testing.T) {
+	t.Setenv("ZEN_HOME", t.TempDir())
+	cfg, worktreePath, prHead := cleanupFixture(t)
+	cfg.Events.Enabled = true
+
+	rec := NewCleanupReconciler(cfg)
+	rec.prMergeInfo = mergedInfo(prHead, 2*time.Hour)
+	if err := rec.Reconcile(context.Background(), "testrepo:999", workqueue.Options{}); err != nil {
+		t.Fatalf("Reconcile() error: %v", err)
+	}
+
+	got := readEventLog(t)
+	if len(got) != 1 {
+		t.Fatalf("got %d events, want 1: %+v", len(got), got)
+	}
+	e := got[0]
+	if e.Type != events.TypeReviewCleaned || e.Repo != "testrepo" || e.PR != 999 || e.Worktree != worktreePath || e.SHA != prHead {
+		t.Errorf("event = %+v", e)
+	}
+	if _, ok := e.Data["merged_at"].(string); !ok {
+		t.Errorf("event data missing merged_at: %+v", e.Data)
+	}
+}
+
+func TestCleanupReconcile_SkipEmitsNothing(t *testing.T) {
+	t.Setenv("ZEN_HOME", t.TempDir())
+	cfg, worktreePath, prHead := cleanupFixture(t)
+	cfg.Events.Enabled = true
+	if err := os.WriteFile(filepath.Join(worktreePath, "notes.txt"), []byte("keep me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := NewCleanupReconciler(cfg)
+	rec.prMergeInfo = mergedInfo(prHead, 2*time.Hour)
+	if err := rec.Reconcile(context.Background(), "testrepo:999", workqueue.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(config.EventsPath()); !os.IsNotExist(err) {
+		t.Error("a skipped cleanup wrote an event")
+	}
+}
+
+// readEventLog parses the event log under the test's ZEN_HOME.
+func readEventLog(t *testing.T) []events.Event {
+	t.Helper()
+	lines, _, err := events.Read(config.EventsPath(), events.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([]events.Event, 0, len(lines))
+	for _, l := range lines {
+		var e events.Event
+		if err := json.Unmarshal(l, &e); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // cleanupFixture creates <base>/testrepo with one commit, the PR head, and

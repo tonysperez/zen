@@ -194,7 +194,10 @@ zen watch stop                   # stop daemon
 zen watch status                 # show daemon status + last check
 zen watch logs                   # tail daemon log output
 zen watch logs search 42         # search logs for a PR, worktree, or keyword
+zen events --since 2h --follow   # daemon event log (opt-in: events.enabled)
 ```
+
+With `events.enabled: true`, the daemon also appends one JSON line per review request, prepared or updated review, session state change, cleanup, and Slack pickup to `~/.zen/state/events.jsonl`, so another process (a supervising agent session, a script) can watch one file instead of polling. See [docs/configuration.md](docs/configuration.md#event-log).
 
 ### Slack task watcher (opt-in)
 

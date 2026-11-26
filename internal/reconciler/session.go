@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mgreau/zen/internal/config"
+	"github.com/mgreau/zen/internal/events"
 	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/session"
 	"github.com/mgreau/zen/internal/worktree"
@@ -82,8 +83,14 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 					if SlackReadyHook != nil {
 						SlackReadyHook(wt.Path, wt.Name, resumeCmd)
 					}
+					Emit(cfg, sessionEvent(events.TypeSessionWaiting, wt, s.ID, shortenedModel, resumeCmd))
 					lastNotifiedAt.Store(s.ID, now)
 				}
+			}
+		}
+		if status == "stopped" {
+			if prev, ok := prevSessionStatus.Load(s.ID); ok && (prev.(string) == "running" || prev.(string) == "waiting") {
+				Emit(cfg, sessionEvent(events.TypeSessionStopped, wt, s.ID, shortenedModel, sessionResumeCmd(wt)))
 			}
 		}
 		prevSessionStatus.Store(s.ID, status)
@@ -106,6 +113,27 @@ func ScanSessions(cfg *config.Config, idleThreshold time.Duration) {
 		fmt.Printf("[%s] Session scan: error writing snapshot: %v\n",
 			time.Now().Format(time.RFC3339), err)
 	}
+}
+
+// sessionEvent builds a session_waiting or session_stopped event for the
+// most recent session in wt.
+func sessionEvent(typ string, wt worktree.Worktree, sessionID, model, resumeCmd string) events.Event {
+	e := events.Event{
+		Type:     typ,
+		Repo:     wt.Repo,
+		Worktree: wt.Path,
+		Session:  sessionID,
+		Data: map[string]any{
+			"name":   wt.Name,
+			"kind":   string(wt.Type),
+			"model":  model,
+			"resume": resumeCmd,
+		},
+	}
+	if wt.Type == worktree.TypePRReview {
+		e.PR = wt.PRNumber
+	}
+	return e
 }
 
 // sessionResumeCmd returns the zen command to resume a session in a new terminal tab.
