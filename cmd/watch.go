@@ -286,6 +286,7 @@ func watchDaemon() error {
 	setupRec := reconciler.NewSetupReconciler(cfg)
 	cleanupRec := reconciler.NewCleanupReconciler(cfg)
 	notify.Configure(cfg.Notify.Command, cfg.Notify.Events)
+	notify.ConfigureDesktop(cfg.Notify.DesktopEnabled())
 	if unknown := cfg.Notify.UnknownTerminalEvents(); len(unknown) > 0 {
 		fmt.Printf("[%s] Warning: notify.terminal_events has values zen doesn't know, kept as is: %s (known: %s)\n",
 			time.Now().Format(time.RFC3339), strings.Join(unknown, ", "), strings.Join(config.TerminalEvents, ", "))
@@ -467,6 +468,7 @@ func reloadConfig(setupRec *reconciler.SetupReconciler, cleanupRec *reconciler.C
 
 	cfg = newCfg
 	notify.Configure(newCfg.Notify.Command, newCfg.Notify.Events)
+	notify.ConfigureDesktop(newCfg.Notify.DesktopEnabled())
 	setupRec.SetConfig(newCfg)
 	cleanupRec.SetConfig(newCfg)
 	if slackRec != nil {
@@ -595,6 +597,9 @@ func shortSHA(sha string) string {
 func watchSlackRefresh(rs *slackpkg.RefreshingSource) {
 	rs.OnFailure = func(err error) {
 		fmt.Printf("[%s] ERROR Slack token refresh failed; the Slack watcher is stalled until this is fixed: %v\n", time.Now().Format(time.RFC3339), err)
+		if !notify.DesktopEnabled() {
+			return
+		}
 		if nerr := notify.Send("zen: Slack sign-in needs attention", "Token refresh failed. Run: zen slack login", err.Error()); nerr != nil {
 			fmt.Printf("[%s] Could not send desktop alert: %v\n", time.Now().Format(time.RFC3339), nerr)
 		}

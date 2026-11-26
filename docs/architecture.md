@@ -109,7 +109,7 @@ Two shapes reach that prompt. History **diverged** — git refuses the fast-forw
 
 **Errors.** Git failures retry with exponential backoff (30s..10m, max 5 attempts). Context injection and PR cache writes are non-blocking — failures are logged but do not prevent the worktree from being created.
 
-**Notifications.** A first sighting with no local worktree sends “New PR Review Request”, whether or not the author is in `authors:`. `WorktreeReady` fires after create; `PRUpdated` fires after a successful fast-forward. PRs already in the inbox when you upgrade are not re-announced (see [configuration.md](configuration.md#upgrading)).
+**Notifications.** A first sighting with no local worktree sends “New PR Review Request”, whether or not the author is in `authors:`. `WorktreeReady` fires after create; `PRUpdated` fires after a successful fast-forward. PRs already in the inbox when you upgrade are not re-announced (see [configuration.md](configuration.md#upgrading)). Every notification goes through `notify.deliver`, which shows it on the desktop unless `notify.desktop` is false (`notify.ConfigureDesktop`) and runs the `notify.command` push for the events in `notify.events`.
 
 ## Source tree
 

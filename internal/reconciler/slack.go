@@ -214,8 +214,12 @@ func (r *SlackReconciler) Reconcile(ctx context.Context, key string, _ workqueue
 // Slack origin (e.g. a plain `zen work new` worktree). Also a no-op — and
 // clears the origin so no future transition re-fires it — if the task is
 // already done (see isDone): this catches a task that finished between the
-// last PruneDone sweep and this transition.
+// last PruneDone sweep and this transition. Nothing is sent when
+// slack.completion_dm is false.
 func (r *SlackReconciler) NotifyReady(worktreePath, worktreeName, resumeCmd string) {
+	if !r.cfg.Slack.CompletionDMEnabled() {
+		return
+	}
 	origin, ok := LoadSlackOrigins()[worktreePath]
 	if !ok {
 		return

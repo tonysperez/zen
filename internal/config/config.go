@@ -109,6 +109,10 @@ type NotifyConfig struct {
 	// Events limits Command to these events (see notify.Events). Empty
 	// means all of them.
 	Events []string `yaml:"events,omitempty"`
+	// Desktop shows notifications on the desktop; unset means on. Off, the
+	// daemon's notifications only run Command, for example when something
+	// other than you (a supervising agent session) should get them.
+	Desktop *bool `yaml:"desktop,omitempty"`
 
 	// Terminal turns zen's own notifications for Claude in tmux windows on
 	// or off; unset means on. They replace Claude's built-in ones there,
@@ -138,6 +142,12 @@ var TerminalEvents = []string{
 	"elicitation_complete", "elicitation_response", "auth_success", "auth_storage_failure",
 	"agent_needs_input", "agent_completed", "plugin_notification",
 	"quota_auto_resume_fired", "quota_auto_resume_stale", "quota_auto_resume_disabled",
+}
+
+// DesktopEnabled reports whether the daemon shows notifications on the
+// desktop, defaulting to true.
+func (n NotifyConfig) DesktopEnabled() bool {
+	return n.Desktop == nil || *n.Desktop
 }
 
 // TerminalEnabled reports whether zen sends its own notifications for
@@ -191,6 +201,13 @@ type SlackConfig struct {
 	DoneEmoji    string `yaml:"done_emoji"`    // reaction (on the original message) or a merged PR from the worktree's branch stops further completion DMs, default "done_check"
 	ClientID     string `yaml:"client_id"`     // Slack app client ID for zen slack login (PKCE; no secret needed)
 	RedirectPort int    `yaml:"redirect_port"` // localhost port for the OAuth redirect, default 8765
+	CompletionDM *bool  `yaml:"completion_dm"` // DM the user when a Slack-started session goes idle, default true
+}
+
+// CompletionDMEnabled reports whether the daemon DMs the user when a
+// Slack-started session goes idle, defaulting to true.
+func (s SlackConfig) CompletionDMEnabled() bool {
+	return s.CompletionDM == nil || *s.CompletionDM
 }
 
 // GetRedirectPort returns the localhost port zen slack login listens on,

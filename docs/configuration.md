@@ -68,6 +68,7 @@ slack:
   ack_reaction: eyes      # reaction added on pickup, default "eyes"
   client_id: "123.456"    # Slack app client ID, for zen slack login
   redirect_port: 8765     # localhost port for the sign-in redirect, default 8765
+  completion_dm: true     # DM you when a Slack-started session goes idle, default true
 
 # What each new tmux session gets, with terminal: tmux. See "New tmux sessions".
 tmux:
@@ -80,6 +81,7 @@ tmux:
 notify:
   command: 'curl -fsS -d "$ZEN_MESSAGE" https://ntfy.sh/<random-topic>'
   events: [session-waiting]
+  desktop: true          # false: only the command, no desktop notifications
 ```
 
 The daemon re-reads `config.yaml` on every poll tick. Changes to `poll_interval`, `authors`, `repos`, and other settings take effect without restarting.
@@ -383,11 +385,25 @@ Quote these variables, as above, rather than pasting them into the command:
 longer than 30 seconds, is logged in the daemon log (`zen watch logs`). The
 desktop notification is still sent either way.
 
+`notify.desktop: false` turns the desktop notifications off and leaves only the
+command, for when something other than you should get them, such as a
+supervising agent session. It covers every desktop notification the daemon
+sends, the Slack sign-in alert included. It defaults to `true`.
+
+```yaml
+notify:
+  desktop: false
+  command: '~/bin/tell-lead'
+  events: [pr-review, session-waiting]
+slack:
+  completion_dm: false   # and no Slack DM when a Slack-started session goes idle
+```
+
 ## Slack task watcher
 
 An opt-in daemon loop that polls for the user's own emoji reaction (`slack.emoji`, default `claudecode`) via `reactions.list`, then for each new hit: adds an ack reaction in-thread (`slack.ack_reaction`, default `eyes`), fetches the thread, creates a feature worktree in `slack.default_repo` from `origin/main`, and immediately launches the agent in a terminal tab with the thread as the initial prompt — the launched session does all the "figure out what to do" work, not the daemon. Unlike the PR-review flow, this does open a terminal tab automatically: a Slack reaction is a deliberate, comparatively rare signal, not the high-volume PR-review firehose.
 
-When that worktree's session later goes idle ("waiting", the same signal that drives the desktop `notify.SessionWaiting`), the daemon also sends a Slack DM to the user with the worktree name, resume command, and a link back to the original thread. That DM stops once the task is actually done: either a merged PR from the worktree's branch, or the configured `slack.done_emoji` (default `done_check`) reacted onto the original message.
+When that worktree's session later goes idle ("waiting", the same signal that drives the desktop `notify.SessionWaiting`), the daemon also sends a Slack DM to the user with the worktree name, resume command, and a link back to the original thread. That DM stops once the task is actually done: either a merged PR from the worktree's branch, or the configured `slack.done_emoji` (default `done_check`) reacted onto the original message. `slack.completion_dm: false` (default `true`) turns that DM off.
 
 Setup:
 

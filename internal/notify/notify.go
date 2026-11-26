@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mgreau/zen/internal/zenbin"
 )
@@ -25,11 +26,12 @@ const (
 	EventStale         = "stale-worktrees"
 	EventWaiting       = "session-waiting"
 	EventDigest        = "digest"
+	EventSlackTask     = "slack-task"
 )
 
 // Events lists every event, in a stable order.
 func Events() []string {
-	return []string{EventPRReview, EventPRUpdated, EventWorktreeReady, EventPRMerged, EventStale, EventWaiting, EventDigest}
+	return []string{EventPRReview, EventPRUpdated, EventWorktreeReady, EventPRMerged, EventStale, EventWaiting, EventDigest, EventSlackTask}
 }
 
 // pushTimeout bounds a push command, so a hung network call cannot stall the
@@ -44,7 +46,23 @@ var (
 	pushMu      sync.Mutex
 	pushCommand string
 	pushEvents  []string
+	desktopOff  bool
 )
+
+// ConfigureDesktop turns the desktop half of each notification on or off
+// (notify.desktop). Off, notifications still run the push command.
+func ConfigureDesktop(enabled bool) {
+	pushMu.Lock()
+	defer pushMu.Unlock()
+	desktopOff = !enabled
+}
+
+// DesktopEnabled reports whether notifications are shown on the desktop.
+func DesktopEnabled() bool {
+	pushMu.Lock()
+	defer pushMu.Unlock()
+	return !desktopOff
+}
 
 // Configure sets a shell command to run for each notification, besides the
 // desktop one: for example a curl to a push service, so notifications reach
@@ -66,17 +84,25 @@ func Configure(command string, events []string) {
 // note is one notification.
 type note struct {
 	event, title, message, subtitle string
-	resume                          string // zen command that opens the worktree, if any
-	clickToResume                   bool   // run resume when the desktop notification is clicked
+	resume                          string   // zen command that opens the worktree, if any
+	clickToResume                   bool     // run resume when the desktop notification is clicked
+	env                             []string // extra KEY=value pairs for the push command
+}
+
+// showDesktop shows n on the desktop. A variable so tests can see what would
+// have been shown.
+var showDesktop = func(n note) error {
+	if n.clickToResume {
+		return SendWithAction(n.title, n.message, n.subtitle, n.resume)
+	}
+	return Send(n.title, n.message, n.subtitle)
 }
 
 // deliver shows n on the desktop and runs the push command, if any.
 func deliver(n note) error {
 	var desktop error
-	if n.clickToResume {
-		desktop = SendWithAction(n.title, n.message, n.subtitle, n.resume)
-	} else {
-		desktop = Send(n.title, n.message, n.subtitle)
+	if DesktopEnabled() {
+		desktop = showDesktop(n)
 	}
 	pushed, err := push(n)
 	if pushed && err == nil {
@@ -110,6 +136,7 @@ func push(n note) (bool, error) {
 		"ZEN_SUBTITLE="+n.subtitle,
 		"ZEN_RESUME="+n.resume,
 	)
+	cmd.Env = append(cmd.Env, n.env...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return true, fmt.Errorf("notify command: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -265,4 +292,49 @@ func Digest(waitingSessions, pendingReviews, featureWork int) error {
 		message:  strings.Join(parts, " • "),
 		subtitle: subtitle,
 	})
+}
+
+// MaxSlackTaskText caps $ZEN_TEXT in a slack-task push. The whole thread, as
+// far as the event carries it, is in $ZEN_EVENT_JSON.
+const MaxSlackTaskText = 4000
+
+// SlackTask notifies that the Slack watcher handed off a flagged thread
+// (slack.route: event) instead of starting an agent on it. Besides the usual
+// variables, the push command gets $ZEN_URL (the thread's permalink),
+// $ZEN_TEXT (the thread, cut to MaxSlackTaskText bytes) and $ZEN_EVENT_JSON
+// (the slack-task event as logged in events.jsonl).
+func SlackTask(user, permalink, text string, eventJSON []byte) error {
+	message := strings.TrimSpace(text)
+	if i := strings.IndexByte(message, '\n'); i >= 0 {
+		message = message[:i]
+	}
+	message, _ = TruncateUTF8(message, 120)
+	subtitle := "flagged in Slack"
+	if user != "" {
+		subtitle = "from " + user
+	}
+	short, _ := TruncateUTF8(text, MaxSlackTaskText)
+	return deliver(note{
+		event:    EventSlackTask,
+		title:    "Slack task",
+		message:  message,
+		subtitle: subtitle,
+		env: []string{
+			"ZEN_URL=" + permalink,
+			"ZEN_TEXT=" + short,
+			"ZEN_EVENT_JSON=" + string(eventJSON),
+		},
+	})
+}
+
+// TruncateUTF8 cuts s to at most n bytes without splitting a rune, and
+// reports whether it cut anything.
+func TruncateUTF8(s string, n int) (string, bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n], true
 }
