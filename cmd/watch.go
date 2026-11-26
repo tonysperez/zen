@@ -20,6 +20,7 @@ import (
 	"github.com/mgreau/zen/internal/config"
 	"github.com/mgreau/zen/internal/events"
 	ghpkg "github.com/mgreau/zen/internal/github"
+	"github.com/mgreau/zen/internal/lead"
 	"github.com/mgreau/zen/internal/notify"
 	"github.com/mgreau/zen/internal/reconciler"
 	slackpkg "github.com/mgreau/zen/internal/slack"
@@ -230,6 +231,9 @@ func watchStatus() error {
 			route = ", route: " + r
 		}
 		fmt.Printf("Slack watcher: enabled (emoji: :%s:%s)\n", cfg.Slack.GetEmoji(), route)
+		if cfg.Slack.LeadChannel != "" {
+			fmt.Printf("Lead channel: %s (every %s)\n", cfg.Slack.LeadChannel, cfg.Slack.LeadPollIntervalDuration())
+		}
 	} else {
 		fmt.Println("Slack watcher: disabled")
 	}
@@ -307,6 +311,7 @@ func watchDaemon() error {
 	var slackClient *slackpkg.Client
 	var slackRec *reconciler.SlackReconciler // nil until auth.test succeeds
 	var slackSource string
+	var slackSelf string // the signed-in user, from auth.test
 	if slackEnabled {
 		src, refreshing, source, err := slackTokenSource()
 		if err != nil {
@@ -339,6 +344,7 @@ func watchDaemon() error {
 			return
 		}
 		fmt.Printf("[%s] Slack watcher: authenticated via %s\n", time.Now().Format(time.RFC3339), slackSource)
+		slackSelf = selfUserID
 		slackRec = reconciler.NewSlackReconciler(cfg, slackClient, selfUserID)
 		reconciler.SlackReadyHook = slackRec.NotifyReady
 	}
@@ -346,6 +352,14 @@ func watchDaemon() error {
 		connectSlack()
 	}
 	slackSeen := loadSeenSlack()
+	// Lead channel watcher (opt-in): reads slack.lead_channel and turns the
+	// user's messages there into slack-message events. It needs the Slack
+	// watcher's sign-in, and reads cfg on each tick, so lead_channel can be
+	// set or cleared without a restart.
+	var leadWatcher *lead.Watcher
+	if slackEnabled {
+		leadWatcher = &lead.Watcher{Client: slackClient, StatePath: lead.StatePath(config.StateDir())}
+	}
 
 	pollTicker := time.NewTicker(pollInterval)
 	defer pollTicker.Stop()
@@ -378,6 +392,15 @@ func watchDaemon() error {
 		slackC = slackTicker.C
 	}
 
+	// Lead channel ticker — runs with the Slack watcher; a no-op tick while
+	// slack.lead_channel is unset.
+	var leadC <-chan time.Time
+	if slackEnabled {
+		leadTicker := time.NewTicker(cfg.Slack.LeadPollIntervalDuration())
+		defer leadTicker.Stop()
+		leadC = leadTicker.C
+	}
+
 	// Initial poll and session scan
 	pollOnce(ctx, st, setupQueue, setupRec)
 	if slackRec != nil {
@@ -385,6 +408,7 @@ func watchDaemon() error {
 		if err := slackRec.PruneDone(ctx); err != nil {
 			fmt.Printf("[%s] Slack prune error: %v\n", time.Now().Format(time.RFC3339), err)
 		}
+		pollLeadOnce(ctx, leadWatcher, slackSelf)
 	}
 	reconciler.ScanSessions(cfg, 10*time.Second)
 
@@ -410,6 +434,11 @@ func watchDaemon() error {
 				}
 			}
 			pollSlackOnce(ctx, slackClient, slackSeen, slackQueue)
+
+		case <-leadC:
+			if slackRec != nil {
+				pollLeadOnce(ctx, leadWatcher, slackSelf)
+			}
 
 		case <-dispatchTicker.C:
 			if err := dispatcher.HandleAsync(setupCtx, setupQueue, concurrency, concurrency, setupRec.Reconcile, maxRetries)(); err != nil {
@@ -700,6 +729,31 @@ func pollSlackOnce(ctx context.Context, client *slackpkg.Client, seen map[string
 	}
 
 	saveSeenSlack(seen)
+}
+
+// pollLeadOnce reads the lead channel once, when slack.lead_channel is set,
+// and logs and pushes a slack-message for each new message the user wrote
+// there. zen's own posts (zen slack post) are skipped by the watcher.
+func pollLeadOnce(ctx context.Context, w *lead.Watcher, selfUserID string) {
+	if w == nil || selfUserID == "" || cfg.Slack.LeadChannel == "" {
+		return
+	}
+	evs, err := w.Poll(ctx, cfg.Slack.LeadChannel, selfUserID, cfg.Slack.GetLeadPrefix())
+	if err != nil {
+		fmt.Printf("[%s] Lead channel poll error: %v\n", time.Now().Format(time.RFC3339), err)
+	}
+	for _, e := range evs {
+		reconciler.Emit(cfg, e)
+		payload, err := json.Marshal(e)
+		if err != nil {
+			fmt.Printf("[%s] Warning: encoding slack-message event: %v\n", time.Now().Format(time.RFC3339), err)
+		}
+		text, _ := e.Data["text"].(string)
+		if _, err := notify.SlackMessage(e.URL, text, payload); err != nil {
+			fmt.Printf("[%s] Warning: slack-message notification: %v\n", time.Now().Format(time.RFC3339), err)
+		}
+		fmt.Printf("[%s] Lead channel: new message %v\n", time.Now().Format(time.RFC3339), e.Data["ts"])
+	}
 }
 
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
